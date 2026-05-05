@@ -11,6 +11,7 @@ class Database:
 
     async def init_db(self):
         async with aiosqlite.connect(self.db_path) as conn:
+            # Create tables
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS analysis_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -18,25 +19,44 @@ class Database:
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                     result_text TEXT NOT NULL,
                     num_images INTEGER DEFAULT 3,
-                    summary TEXT,
-                    z5_score REAL,
-                    gex_flip_zone REAL,
-                    max_pain REAL,
-                    range_high_1sd REAL,
-                    range_low_1sd REAL,
-                    was_accurate BOOLEAN
+                    summary TEXT
                 )
             ''')
+            
+            # Migration: Add missing columns to analysis_history
+            cursor = await conn.execute("PRAGMA table_info(analysis_history)")
+            existing_cols = [row[1] for row in await cursor.fetchall()]
+            
+            migrations = [
+                ('z5_score', 'REAL'),
+                ('gex_flip_zone', 'REAL'),
+                ('max_pain', 'REAL'),
+                ('range_high_1sd', 'REAL'),
+                ('range_low_1sd', 'REAL'),
+                ('was_accurate', 'BOOLEAN')
+            ]
+            
+            for col_name, col_type in migrations:
+                if col_name not in existing_cols:
+                    await conn.execute(f"ALTER TABLE analysis_history ADD COLUMN {col_name} {col_type}")
+
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS schedules (
                     user_id INTEGER PRIMARY KEY,
                     interval_hours INTEGER NOT NULL DEFAULT 3,
                     is_active BOOLEAN DEFAULT 1,
-                    reminders_enabled BOOLEAN DEFAULT 1,
-                    alerts_enabled BOOLEAN DEFAULT 1,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+
+            # Migration: Add missing columns to schedules
+            cursor = await conn.execute("PRAGMA table_info(schedules)")
+            sched_cols = [row[1] for row in await cursor.fetchall()]
+            if 'reminders_enabled' not in sched_cols:
+                await conn.execute("ALTER TABLE schedules ADD COLUMN reminders_enabled BOOLEAN DEFAULT 1")
+            if 'alerts_enabled' not in sched_cols:
+                await conn.execute("ALTER TABLE schedules ADD COLUMN alerts_enabled BOOLEAN DEFAULT 1")
+
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS performance_stats (
                     user_id INTEGER PRIMARY KEY,
