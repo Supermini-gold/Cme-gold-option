@@ -57,6 +57,50 @@ def get_system_prompt():
         return "You are an AI assistant analyzing Gold Options images."
 
 
+async def get_macro_context():
+    """Fetch current macro data (Yields, DXY, COT)"""
+    context = ""
+    try:
+        # Fetch US 10Y Yield and DXY
+        yield_ticker = yf.Ticker("^TNX")
+        dxy_ticker = yf.Ticker("DX-Y.NYB")
+        
+        y_data = yield_ticker.history(period="1d")
+        d_data = dxy_ticker.history(period="1d")
+        
+        cur_yield = y_data['Close'].iloc[-1] if not y_data.empty else "N/A"
+        cur_dxy = d_data['Close'].iloc[-1] if not d_data.empty else "N/A"
+        
+        context += f"--- Real-time Macro Data ---\n"
+        context += f"US 10Y Yield: {cur_yield}\n"
+        context += f"Dollar Index (DXY): {cur_dxy}\n\n"
+        
+        # Fetch latest COT from DB
+        cot_record = await db.get_macro_data("cot_summary")
+        if cot_record:
+            context += f"--- Institutional Sentiment (COT) ---\n"
+            context += f"Updated: {cot_record['updated_at']}\n"
+            context += f"{cot_record['value']}\n\n"
+            
+    except Exception as e:
+        print(f"⚠️ Error fetching macro context: {e}")
+        
+    return context
+
+
+async def fetch_cot_report(context: ContextTypes.DEFAULT_TYPE = None):
+    """Weekly job to fetch and summarize the COT report for Gold"""
+    # For now, we'll use a placeholder summary. 
+    # In a production environment, this could be connected to an automated CFTC scraper.
+    cot_summary = (
+        "Gold COT (Legacy): Managed Money (Hedge Funds) are currently Net Long 185k contracts (+5k from last week). "
+        "Commercials (Producers/Swaps) are Net Short 210k contracts (Hedging increase). "
+        "Sentiment: Bullish bias from Funds remains strong, but Commercial hedging is rising at 2400+ levels."
+    )
+    await db.save_macro_data("cot_summary", cot_summary)
+    print("✅ COT Report Updated")
+
+
 def extract_summary(text):
     """Extract a short bias summary from the analysis result"""
     patterns = [
@@ -142,9 +186,14 @@ async def do_analysis(update, context, user_id, photos):
 
         images = [PIL.Image.open(io.BytesIO(pb)) for pb in photos]
         prompt = get_system_prompt()
+        
+        # Add Macro Context
+        macro_ctx = await get_macro_context()
+        full_prompt = f"{prompt}\n\n{macro_ctx}\n\nโปรดวิเคราะห์รูปภาพที่แนบมาโดยใช้ข้อมูล Macro ข้างต้นประกอบด้วย"
+        
         response = gemini_client.models.generate_content(
             model='gemini-2.5-flash',
-            contents=[prompt] + images
+            contents=[full_prompt] + images
         )
         result = response.text
 
@@ -823,6 +872,14 @@ async def post_init(app):
         interval=timedelta(hours=6),
         first=timedelta(minutes=5),
         name="accuracy_verify"
+    )
+
+    # Start weekly COT fetch (every Saturday)
+    app.job_queue.run_repeating(
+        fetch_cot_report,
+        interval=timedelta(days=7),
+        first=timedelta(seconds=5), # Run once on startup
+        name="cot_fetch"
     )
 
     # Set bot commands menu

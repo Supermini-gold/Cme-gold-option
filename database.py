@@ -45,6 +45,13 @@ class Database:
                     last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS macro_data (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
             await conn.commit()
 
     async def save_analysis(self, user_id, result_text, num_images=3, summary=None, z5=None, gex=None, max_pain=None, high_1sd=None, low_1sd=None):
@@ -81,12 +88,23 @@ class Database:
             
             await conn.commit()
 
-    async def get_performance_stats(self, user_id):
+    async def save_macro_data(self, key, value):
+        async with aiosqlite.connect(self.db_path) as conn:
+            await conn.execute(
+                '''INSERT INTO macro_data (key, value, updated_at)
+                   VALUES (?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(key) DO UPDATE SET
+                   value = excluded.value, updated_at = CURRENT_TIMESTAMP''',
+                (key, value)
+            )
+            await conn.commit()
+
+    async def get_macro_data(self, key):
         async with aiosqlite.connect(self.db_path) as conn:
             conn.row_factory = aiosqlite.Row
             cursor = await conn.execute(
-                'SELECT * FROM performance_stats WHERE user_id = ?',
-                (user_id,)
+                'SELECT * FROM macro_data WHERE key = ?',
+                (key,)
             )
             return await cursor.fetchone()
 

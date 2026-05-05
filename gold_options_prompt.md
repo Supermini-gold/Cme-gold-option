@@ -276,25 +276,50 @@ VWAP Strike = Σ(Strike × Volume) / Σ(Volume)
 - ถ้าราคาลงต่ำกว่า [Strike] → สัญญาณ [...]
 - Catalyst ที่อาจเปลี่ยน Bias: [...]
 
-### 💰 แนะนำกลยุทธ์การเทรด CFD
+---
 
+## SECTION 6 — Market Regime & Whale Watch
+
+### 📊 Market Regime Detection
+วิเคราะห์สภาวะตลาดปัจจุบันจาก IV, Skew และ GEX Profile:
+- **โหมดตลาด**: [เลือก: Low Vol Trending / Low Vol Ranging / High Vol Trending / High Vol Ranging]
+- **คำอธิบาย**: [เหตุผลที่เลือกโหมดนี้ เช่น "IV ต่ำแต่ Skew เอียงฝั่ง Call มาก แสดงถึง Bullish Trending"]
+- **คำแนะนำพฤติกรรม**: [เช่น "เน้น Buy on Dip" หรือ "เน้นเก็บค่า Premium"]
+
+### 🐋 Whale Watch (Block Trades & Anomalies)
+ค้นหาความผิดปกติใน Volume และ OI:
+- **Strike ที่พบความผิดปกติ**: [Strike] — [Volume/OI สูงโดดเด่นกี่เท่าของค่าเฉลี่ย]
+- **การแปลความหมาย**: [เช่น "มีการวางเดิมพันก้อนใหญ่ (Whale Betting) ว่าราคาจะไม่ผ่าน X" หรือ "การปิดสถานะป้องกันความเสี่ยง (Covering)"]
+
+---
+
+## SECTION 7 — Macro Divergence (Yields/DXY)
+
+วิเคราะห์ความสอดคล้องระหว่างราคาทองกับปัจจัยมหภาค:
+- **US 10Y Yield**: [ค่า] — **Correlation**: [สอดคล้อง/ขัดแย้ง]
+- **Dollar Index (DXY)**: [ค่า] — **Correlation**: [สอดคล้อง/ขัดแย้ง]
+- **Institutional Sentiment (COT)**: [สรุปจากข้อมูลล่าสุด เช่น "กองทุนยัง Long สุทธิเพิ่มขึ้น"]
+- **Macro Logic**: [เช่น "ทองขึ้นสวนทางกับ Yield ที่พุ่งแรง แสดงถึง Strong Safe-haven Demand (Institutional Buying)"]
+
+---
+
+## 🎯 สรุป Trading Plan & Action (Simplified)
+
+### 📢 Plain Thai (ภาษาเทรดเข้าใจง่าย)
+- **สรุปแผน**: [สรุปใน 1-2 ประโยค เช่น "ราคาทองกำลังถูกวาฬไล่ซื้อสวนทางกับดอลลาร์ แนะนำรอจังหวะย่อตัวแถว X เพื่อเข้าซื้อ เป้าหมายกำไรที่ Y"]
+
+### 💰 กลยุทธ์การเทรด CFD
 #### 🟢 กลยุทธ์ฝั่ง Long (ถ้า Bias เป็น Bullish หรือ Neutral-Bullish)
-- **Plain Thai (ภาษาเทรดเข้าใจง่าย)**: [สรุปใน 1-2 ประโยคว่าต้องทำอะไร เช่น "รอรับที่ราคา X เพื่อไปขายที่ Y"]
-- **Entry Zone**: [ราคา] — เหตุผล: [...]
-- **Stop Loss**: [ราคา] — ต่ำกว่า [Key Level] ? จุด
-- **Take Profit 1**: [ราคา] — ที่ [Level อะไร]
-- **Take Profit 2**: [ราคา] — ที่ [Level อะไร]
-- **Risk:Reward**: 1:?
-- **Position Size แนะนำ**: [% ของ Portfolio] เพราะ [Confidence Level]
+- **Entry Zone**: [ราคา] — เหตุผล: [อ้างอิง Key Level หรือ Whale Zone]
+- **Stop Loss**: [ราคา]
+- **Take Profit**: [ราคา]
+- **Confidence Level**: [0-100%]
 
 #### 🔴 กลยุทธ์ฝั่ง Short (ถ้า Bias เป็น Bearish หรือ Neutral-Bearish)
-- **Plain Thai (ภาษาเทรดเข้าใจง่าย)**: [สรุปใน 1-2 ประโยคว่าต้องทำอะไร]
-- **Entry Zone**: [ราคา] — เหตุผล: [...]
-- **Stop Loss**: [ราคา] — เหนือ [Key Level] ? จุด
-- **Take Profit 1**: [ราคา] — ที่ [Level อะไร]
-- **Take Profit 2**: [ราคา] — ที่ [Level อะไร]
-- **Risk:Reward**: 1:?
-- **Position Size แนะนำ**: [% ของ Portfolio] เพราะ [Confidence Level]
+- **Entry Zone**: [ราคา] — เหตุผล: [อ้างอิง Key Level หรือ Whale Zone]
+- **Stop Loss**: [ราคา]
+- **Take Profit**: [ราคา]
+- **Confidence Level**: [0-100%]
 
 #### ⚖️ Hedging Strategy (ถ้า Bias เป็น Neutral หรือ Uncertain)
 - อธิบายวิธี Hedge ด้วย Key Levels ที่วิเคราะห์ได้
