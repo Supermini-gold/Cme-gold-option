@@ -348,6 +348,9 @@ async def debug_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         report += f"❌ **Database**: ล้มเหลว ({str(e)})\n"
 
     await update.message.reply_text(report)
+
+
+async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """View bot performance statistics"""
     user_id = update.message.chat_id
     stats = await db.get_performance_stats(user_id)
