@@ -192,7 +192,7 @@ async def do_analysis(update, context, user_id, photos):
         full_prompt = f"{prompt}\n\n{macro_ctx}\n\nโปรดวิเคราะห์รูปภาพที่แนบมาโดยใช้ข้อมูล Macro ข้างต้นประกอบด้วย"
         
         response = gemini_client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-2.0-flash',
             contents=[full_prompt] + images
         )
         result = response.text
@@ -842,7 +842,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         response = gemini_client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-2.0-flash',
             contents=followup_prompt
         )
         await safe_reply(update.message, response.text)
@@ -855,9 +855,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def post_init(app):
     """Run after bot starts — init DB and restore schedules"""
+    print("🚀 Initializing database...")
     await db.init_db()
+    print("🚀 Restoring schedules...")
     await restore_schedules(app)
     
+    print("🚀 Starting background jobs...")
     # Start background price alert job (every 15 minutes)
     app.job_queue.run_repeating(
         check_price_alerts,
@@ -909,6 +912,12 @@ def main():
         print("⚠️ ไม่พบ TELEGRAM_BOT_TOKEN ในไฟล์ .env")
         return
 
+    print("✅ Gold Options Bot กำลังเริ่มการทำงาน...")
+    print("📋 Commands: /start /help /analyze /reset /status")
+    print("📋 History:  /history /detail /export")
+    print("📋 Schedule: /schedule /schedule_off /schedule_status")
+    print("💬 Follow-up chat: ส่งข้อความถามได้หลังวิเคราะห์")
+    
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
 
     # Command handlers
