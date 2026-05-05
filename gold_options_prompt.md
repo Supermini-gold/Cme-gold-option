@@ -279,6 +279,7 @@ VWAP Strike = Σ(Strike × Volume) / Σ(Volume)
 ### 💰 แนะนำกลยุทธ์การเทรด CFD
 
 #### 🟢 กลยุทธ์ฝั่ง Long (ถ้า Bias เป็น Bullish หรือ Neutral-Bullish)
+- **Plain Thai (ภาษาเทรดเข้าใจง่าย)**: [สรุปใน 1-2 ประโยคว่าต้องทำอะไร เช่น "รอรับที่ราคา X เพื่อไปขายที่ Y"]
 - **Entry Zone**: [ราคา] — เหตุผล: [...]
 - **Stop Loss**: [ราคา] — ต่ำกว่า [Key Level] ? จุด
 - **Take Profit 1**: [ราคา] — ที่ [Level อะไร]
@@ -287,6 +288,7 @@ VWAP Strike = Σ(Strike × Volume) / Σ(Volume)
 - **Position Size แนะนำ**: [% ของ Portfolio] เพราะ [Confidence Level]
 
 #### 🔴 กลยุทธ์ฝั่ง Short (ถ้า Bias เป็น Bearish หรือ Neutral-Bearish)
+- **Plain Thai (ภาษาเทรดเข้าใจง่าย)**: [สรุปใน 1-2 ประโยคว่าต้องทำอะไร]
 - **Entry Zone**: [ราคา] — เหตุผล: [...]
 - **Stop Loss**: [ราคา] — เหนือ [Key Level] ? จุด
 - **Take Profit 1**: [ราคา] — ที่ [Level อะไร]

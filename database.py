@@ -21,7 +21,10 @@ class Database:
                     summary TEXT,
                     z5_score REAL,
                     gex_flip_zone REAL,
-                    max_pain REAL
+                    max_pain REAL,
+                    range_high_1sd REAL,
+                    range_low_1sd REAL,
+                    was_accurate BOOLEAN
                 )
             ''')
             await conn.execute('''
@@ -34,16 +37,58 @@ class Database:
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS performance_stats (
+                    user_id INTEGER PRIMARY KEY,
+                    total_analyzed INTEGER DEFAULT 0,
+                    total_accurate INTEGER DEFAULT 0,
+                    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
             await conn.commit()
 
-    async def save_analysis(self, user_id, result_text, num_images=3, summary=None, z5=None, gex=None, max_pain=None):
+    async def save_analysis(self, user_id, result_text, num_images=3, summary=None, z5=None, gex=None, max_pain=None, high_1sd=None, low_1sd=None):
         async with aiosqlite.connect(self.db_path) as conn:
             cursor = await conn.execute(
-                'INSERT INTO analysis_history (user_id, result_text, num_images, summary, z5_score, gex_flip_zone, max_pain) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                (user_id, result_text, num_images, summary, z5, gex, max_pain)
+                '''INSERT INTO analysis_history 
+                   (user_id, result_text, num_images, summary, z5_score, gex_flip_zone, max_pain, range_high_1sd, range_low_1sd) 
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                (user_id, result_text, num_images, summary, z5, gex, max_pain, high_1sd, low_1sd)
             )
             await conn.commit()
             return cursor.lastrowid
+
+    async def update_accuracy(self, analysis_id, was_accurate):
+        async with aiosqlite.connect(self.db_path) as conn:
+            await conn.execute(
+                'UPDATE analysis_history SET was_accurate = ? WHERE id = ?',
+                (was_accurate, analysis_id)
+            )
+            
+            # Update stats
+            cursor = await conn.execute('SELECT user_id FROM analysis_history WHERE id = ?', (analysis_id,))
+            row = await cursor.fetchone()
+            if row:
+                user_id = row[0]
+                await conn.execute('''
+                    INSERT INTO performance_stats (user_id, total_analyzed, total_accurate)
+                    VALUES (?, 1, ?)
+                    ON CONFLICT(user_id) DO UPDATE SET
+                    total_analyzed = total_analyzed + 1,
+                    total_accurate = total_accurate + ?,
+                    last_updated = CURRENT_TIMESTAMP
+                ''', (user_id, 1 if was_accurate else 0, 1 if was_accurate else 0))
+            
+            await conn.commit()
+
+    async def get_performance_stats(self, user_id):
+        async with aiosqlite.connect(self.db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.execute(
+                'SELECT * FROM performance_stats WHERE user_id = ?',
+                (user_id,)
+            )
+            return await cursor.fetchone()
 
     async def get_history(self, user_id, limit=10):
         async with aiosqlite.connect(self.db_path) as conn:

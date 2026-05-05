@@ -95,6 +95,21 @@ def extract_key_levels(text):
     return max_pain, gex_zone
 
 
+def extract_expected_range(text):
+    """Extract 1SD Expected Range from the table"""
+    high = None
+    low = None
+    
+    # Looking for 1SD (68%) | [high] | [low] | ...
+    pattern = r'1SD \(68%\)\s*\|\s*(\d+\.?\d*)\s*\|\s*(\d+\.?\d*)'
+    match = re.search(pattern, text)
+    if match:
+        high = float(match.group(1))
+        low = float(match.group(2))
+        
+    return high, low
+
+
 async def safe_reply(message, text):
     """Send message with Markdown. Fallback to plain text if parse fails."""
     chunks = [text[i:i+4000] for i in range(0, len(text), 4000)]
@@ -144,8 +159,9 @@ async def do_analysis(update, context, user_id, photos):
         summary = extract_summary(result)
         z5 = extract_z5_score(result)
         max_pain, gex = extract_key_levels(result)
+        high_1sd, low_1sd = extract_expected_range(result)
         
-        analysis_id = await db.save_analysis(user_id, result, count, summary, z5, gex, max_pain)
+        analysis_id = await db.save_analysis(user_id, result, count, summary, z5, gex, max_pain, high_1sd, low_1sd)
         await db.cleanup_old_history(user_id, keep_count=20)
 
         # Send result with safe markdown
@@ -162,6 +178,16 @@ async def do_analysis(update, context, user_id, photos):
             )
         except Exception as img_e:
             await update.message.reply_text(f"❌ สร้างรูปภาพไม่สำเร็จ: {str(img_e)}")
+
+        # Auto-save PDF to exports folder
+        try:
+            pdf_bytes = generate_pdf(result, now_str)
+            filename = f"Gold_Analysis_{analysis_id}_{now_str.split(' ')[0]}.pdf"
+            filepath = os.path.join("exports", filename)
+            with open(filepath, "wb") as f:
+                f.write(pdf_bytes)
+        except Exception as pdf_e:
+            print(f"⚠️ Auto-save PDF error: {pdf_e}")
 
         # Footer with tips
         await update.message.reply_text(
@@ -236,6 +262,81 @@ async def trend_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as e:
         await update.message.reply_text(f"❌ ไม่สามารถสร้างกราฟได้: {str(e)}")
+
+
+async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """View bot performance statistics"""
+    user_id = update.message.chat_id
+    stats = await db.get_performance_stats(user_id)
+    
+    if not stats or stats['total_analyzed'] == 0:
+        await update.message.reply_text("📊 ยังไม่มีสถิติการวิเคราะห์ครับ ต้องรอการตรวจสอบความแม่นยำหลังผ่านไป 24 ชม.")
+        return
+        
+    win_rate = (stats['total_accurate'] / stats['total_analyzed']) * 100
+    await update.message.reply_text(
+        f"🏆 **Bot Performance Stats**\n\n"
+        f"🎯 วิเคราะห์ทั้งหมด: {stats['total_analyzed']} ครั้ง\n"
+        f"✅ อยู่ในกรอบที่คาดการณ์: {stats['total_accurate']} ครั้ง\n"
+        f"📈 ความแม่นยำ (Hit Rate): {win_rate:.1f}%\n\n"
+        f"🕒 อัปเดตล่าสุด: {stats['last_updated']}"
+    )
+
+
+async def verify_previous_analyses(context: ContextTypes.DEFAULT_TYPE):
+    """Daily job to check if yesterday's ranges were accurate"""
+    # Find all analyses from roughly 24h ago that haven't been verified
+    async with aiosqlite.connect(db.db_path) as conn:
+        conn.row_factory = aiosqlite.Row
+        # Look for analyses older than 20h but younger than 48h that haven't been verified
+        cursor = await conn.execute('''
+            SELECT * FROM analysis_history 
+            WHERE was_accurate IS NULL 
+            AND timestamp < datetime('now', '-20 hours')
+            AND range_high_1sd IS NOT NULL
+        ''')
+        rows = await cursor.fetchall()
+        
+    if not rows:
+        return
+
+    try:
+        gold = yf.Ticker("GC=F")
+        # Get historical data for the relevant period
+        hist = gold.history(period="5d") # Get a few days to be safe
+    except Exception as e:
+        print(f"⚠️ Error fetching history for verification: {e}")
+        return
+
+    for row in rows:
+        ts = pd.to_datetime(row['timestamp']).date()
+        # Find the High/Low for that specific date in the history
+        day_data = hist[hist.index.date == ts]
+        
+        if day_data.empty:
+            continue
+            
+        actual_high = day_data['High'].max()
+        actual_low = day_data['Low'].min()
+        
+        # Check if it was accurate (stayed within 1SD range)
+        is_accurate = (actual_high <= row['range_high_1sd']) and (actual_low >= row['range_low_1sd'])
+        
+        await db.update_accuracy(row['id'], is_accurate)
+        
+        # Optionally notify user
+        try:
+            status_text = "✅ **ถูกต้อง!** ราคาเคลื่อนไหวในกรอบ" if is_accurate else "❌ **คลาดเคลื่อน** ราคาหลุดกรอบที่คาดการณ์"
+            await context.bot.send_message(
+                chat_id=row['user_id'],
+                text=f"📊 **สรุปผลความแม่นยำย้อนหลัง**\n\n"
+                     f"การวิเคราะห์เมื่อ: {row['timestamp']}\n"
+                     f"กรอบที่ให้: {row['range_low_1sd']} - {row['range_high_1sd']}\n"
+                     f"ราคาวันนั้น: {actual_low:.2f} - {actual_high:.2f}\n\n"
+                     f"ผลลัพธ์: {status_text}"
+            )
+        except Exception:
+            pass
 
 
 async def check_price_alerts(context: ContextTypes.DEFAULT_TYPE):
@@ -468,12 +569,17 @@ async def export_pdf_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         pdf_bytes = generate_pdf(record['result_text'], record['timestamp'])
-        filename = f"gold_analysis_{record['id']}_{record['timestamp'][:10]}.pdf"
+        
+        # Save to exports folder for long-term storage
+        filename = f"Gold_Analysis_{record['id']}_{record['timestamp'].replace(':', '-').replace(' ', '_')}.pdf"
+        filepath = os.path.join("exports", filename)
+        with open(filepath, "wb") as f:
+            f.write(pdf_bytes)
 
         await update.message.reply_document(
             document=io.BytesIO(pdf_bytes),
             filename=filename,
-            caption=f"📊 Gold Options Analysis Report #{record['id']}"
+            caption=f"📊 Gold Options Analysis Report #{record['id']}\n(บันทึกไฟล์ลงคลังระบบเรียบร้อยครับ)"
         )
     except Exception as e:
         await update.message.reply_text(f"❌ สร้าง PDF ไม่สำเร็จ: {str(e)}")
@@ -711,6 +817,14 @@ async def post_init(app):
         name="price_alerts"
     )
 
+    # Start daily accuracy verification (every 6 hours)
+    app.job_queue.run_repeating(
+        verify_previous_analyses,
+        interval=timedelta(hours=6),
+        first=timedelta(minutes=5),
+        name="accuracy_verify"
+    )
+
     # Set bot commands menu
     await app.bot.set_my_commands([
         BotCommand("start", "เริ่มต้นใช้งาน"),
@@ -720,6 +834,7 @@ async def post_init(app):
         BotCommand("status", "ดูจำนวนรูปในคิว"),
         BotCommand("history", "ประวัติวิเคราะห์"),
         BotCommand("trend", "กราฟแนวโน้ม Sentiment"),
+        BotCommand("stats", "สถิติความแม่นยำ"),
         BotCommand("detail", "ดูผลเต็มตาม ID"),
         BotCommand("export", "ส่งรูปภาพผลวิเคราะห์"),
         BotCommand("export_pdf", "ส่ง PDF ผลวิเคราะห์"),
@@ -747,6 +862,7 @@ def main():
     app.add_handler(CommandHandler("analyze", analyze_cmd))
     app.add_handler(CommandHandler("history", history_cmd))
     app.add_handler(CommandHandler("trend", trend_cmd))
+    app.add_handler(CommandHandler("stats", stats_cmd))
     app.add_handler(CommandHandler("detail", detail_cmd))
     app.add_handler(CommandHandler("export", export_cmd))
     app.add_handler(CommandHandler("export_pdf", export_pdf_cmd))
