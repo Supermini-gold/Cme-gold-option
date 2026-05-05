@@ -16,6 +16,11 @@ import PIL.Image
 from database import Database
 from pdf_export import generate_pdf
 from image_export import generate_image
+import matplotlib.pyplot as plt
+import pandas as pd
+import yfinance as yf
+import matplotlib
+matplotlib.use('Agg')  # Non-interactive backend
 
 # Load environment variables
 env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
@@ -66,6 +71,30 @@ def extract_summary(text):
     return "วิเคราะห์เสร็จสมบูรณ์"
 
 
+def extract_z5_score(text):
+    """Extract Z5 Composite Score from the Z-Score Summary table"""
+    match = re.search(r'Z5 Composite\s*\|\s*([-+]?\d*\.?\d+)', text)
+    if match:
+        return float(match.group(1))
+    return None
+
+
+def extract_key_levels(text):
+    """Extract Max Pain and GEX Flip Zone from the Key Levels section"""
+    max_pain = None
+    gex_zone = None
+    
+    mp_match = re.search(r'Max Pain Zone:\s*\[?(\d+\.?\d*)\]?', text)
+    if mp_match:
+        max_pain = float(mp_match.group(1))
+        
+    gex_match = re.search(r'GEX Flip Zone:\s*\[?(\d+\.?\d*)\]?', text)
+    if gex_match:
+        gex_zone = float(gex_match.group(1))
+        
+    return max_pain, gex_zone
+
+
 async def safe_reply(message, text):
     """Send message with Markdown. Fallback to plain text if parse fails."""
     chunks = [text[i:i+4000] for i in range(0, len(text), 4000)]
@@ -113,7 +142,10 @@ async def do_analysis(update, context, user_id, photos):
 
         # Save to database
         summary = extract_summary(result)
-        analysis_id = await db.save_analysis(user_id, result, count, summary)
+        z5 = extract_z5_score(result)
+        max_pain, gex = extract_key_levels(result)
+        
+        analysis_id = await db.save_analysis(user_id, result, count, summary, z5, gex, max_pain)
         await db.cleanup_old_history(user_id, keep_count=20)
 
         # Send result with safe markdown
@@ -146,6 +178,115 @@ async def do_analysis(update, context, user_id, photos):
     user_photos[user_id] = []
 
 
+# ===================== TRENDS & ALERTS =====================
+
+async def trend_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Generate and send a Sentiment Trend graph (Z5 Score)"""
+    user_id = update.message.chat_id
+    records = await db.get_history(user_id, limit=10)
+    
+    if not records:
+        await update.message.reply_text("📭 ยังไม่มีข้อมูลวิเคราะห์สำหรับทำกราฟ")
+        return
+        
+    # We need full records to get z5_score
+    full_records = []
+    for r in records:
+        fr = await db.get_analysis_by_id(r['id'], user_id)
+        if fr and fr['z5_score'] is not None:
+            full_records.append(fr)
+            
+    if len(full_records) < 2:
+        await update.message.reply_text("📊 ต้องการข้อมูลอย่างน้อย 2 รายการเพื่อทำกราฟครับ")
+        return
+        
+    await update.message.reply_text("📈 กำลังประมวลผลกราฟเทรนด์...")
+    
+    try:
+        df = pd.DataFrame([dict(r) for r in full_records])
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        df = df.sort_values('timestamp')
+        
+        plt.figure(figsize=(10, 6))
+        plt.style.use('dark_background')
+        
+        # Plot Z5 Score
+        plt.plot(df['timestamp'], df['z5_score'], marker='o', linestyle='-', color='#00d2ff', linewidth=2, label='Z5 Score')
+        
+        # Fill regions
+        plt.axhspan(2, 5, color='green', alpha=0.1, label='Extreme Bullish')
+        plt.axhspan(-5, -2, color='red', alpha=0.1, label='Extreme Bearish')
+        plt.axhline(0, color='white', linestyle='--', alpha=0.3)
+        
+        plt.title('Gold Sentiment Trend (Z5 Composite Score)', fontsize=14, pad=20)
+        plt.xlabel('Date/Time', fontsize=10)
+        plt.ylabel('Z5 Score', fontsize=10)
+        plt.grid(True, alpha=0.2)
+        plt.legend()
+        
+        # Save to buffer
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', bbox_inches='tight', dpi=120)
+        buf.seek(0)
+        plt.close()
+        
+        await update.message.reply_photo(
+            photo=buf,
+            caption="📊 กราฟแนวโน้มความมั่นใจของ Smart Money (Z5 Score)\nย้อนหลังสูงสุด 10 รายการล่าสุด"
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ ไม่สามารถสร้างกราฟได้: {str(e)}")
+
+
+async def check_price_alerts(context: ContextTypes.DEFAULT_TYPE):
+    """Job to check current Gold price against key levels (GEX/Max Pain)"""
+    # This job runs for all users who have analyzed recently
+    # For simplicity, we'll check users with active schedules or recent history
+    schedules = await db.get_all_active_schedules()
+    user_ids = [s['user_id'] for s in schedules]
+    
+    if not user_ids:
+        return
+        
+    try:
+        # Fetch current gold price (Gold Futures GC=F)
+        gold = yf.Ticker("GC=F")
+        price_data = gold.history(period="1d")
+        if price_data.empty:
+            return
+        current_price = price_data['Close'].iloc[-1]
+    except Exception as e:
+        print(f"⚠️ Error fetching price: {e}")
+        return
+
+    for uid in user_ids:
+        record = await db.get_latest_analysis(uid)
+        if not record or (record['gex_flip_zone'] is None and record['max_pain'] is None):
+            continue
+            
+        gex = record['gex_flip_zone']
+        mp = record['max_pain']
+        
+        alert_text = ""
+        # Check GEX Flip Zone (within 0.5%)
+        if gex and abs(current_price - gex) / gex < 0.005:
+            alert_text += f"⚡ **ราคาเข้าใกล้ GEX Flip Zone: {gex}**\n(ปัจจุบัน: {current_price:.2f})\n\n"
+            
+        # Check Max Pain (within 0.5%)
+        if mp and abs(current_price - mp) / mp < 0.005:
+            alert_text += f"🟡 **ราคาเข้าใกล้ Max Pain: {mp}**\n(ปัจจุบัน: {current_price:.2f})\n\n"
+            
+        if alert_text:
+            try:
+                # Send alert (we need to handle cases where bot is blocked)
+                await context.bot.send_message(
+                    chat_id=uid,
+                    text=f"🚨 **PRICE ALERT!**\n\n{alert_text}กรุณาตรวจสอบหน้างานเพื่อความปลอดภัยครับ"
+                )
+            except Exception:
+                pass
+
+
 # ===================== COMMAND HANDLERS =====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -160,6 +301,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "   หรือส่งกี่รูปก็ได้แล้วพิมพ์ /analyze\n"
         "3. รอ Gemini 2.5 Flash วิเคราะห์ ~10-30 วินาที\n"
         "4. ถามคำถามเพิ่มเติมได้ ส่งข้อความมาเลย!\n\n"
+        "📈 /trend — ดูแนวโน้ม Sentiment ย้อนหลัง\n"
         "📋 พิมพ์ /help เพื่อดูคำสั่งทั้งหมดครับ"
     )
 
@@ -175,6 +317,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/status — ดูจำนวนรูปที่ส่งแล้ว\n\n"
         "🔹 ประวัติ & ส่งออก\n"
         "/history — ดู 10 ผลวิเคราะห์ล่าสุด\n"
+        "/trend — ดูแนวโน้ม Sentiment ย้อนหลัง\n"
         "/detail <ID> — ดูผลวิเคราะห์เต็มตาม ID\n"
         "/export — ส่งรูปภาพผลวิเคราะห์ล่าสุด\n"
         "/export_pdf <ID> — ส่ง PDF ตาม ID\n\n"
@@ -508,6 +651,14 @@ async def post_init(app):
     """Run after bot starts — init DB and restore schedules"""
     await db.init_db()
     await restore_schedules(app)
+    
+    # Start background price alert job (every 15 minutes)
+    app.job_queue.run_repeating(
+        check_price_alerts,
+        interval=timedelta(minutes=15),
+        first=timedelta(seconds=10),
+        name="price_alerts"
+    )
 
     # Set bot commands menu
     await app.bot.set_my_commands([
@@ -517,6 +668,7 @@ async def post_init(app):
         BotCommand("reset", "ล้างรูปเริ่มใหม่"),
         BotCommand("status", "ดูจำนวนรูปในคิว"),
         BotCommand("history", "ประวัติวิเคราะห์"),
+        BotCommand("trend", "กราฟแนวโน้ม Sentiment"),
         BotCommand("detail", "ดูผลเต็มตาม ID"),
         BotCommand("export", "ส่งรูปภาพผลวิเคราะห์"),
         BotCommand("export_pdf", "ส่ง PDF ผลวิเคราะห์"),
@@ -540,6 +692,7 @@ def main():
     app.add_handler(CommandHandler("reset", reset_cmd))
     app.add_handler(CommandHandler("analyze", analyze_cmd))
     app.add_handler(CommandHandler("history", history_cmd))
+    app.add_handler(CommandHandler("trend", trend_cmd))
     app.add_handler(CommandHandler("detail", detail_cmd))
     app.add_handler(CommandHandler("export", export_cmd))
     app.add_handler(CommandHandler("export_pdf", export_pdf_cmd))

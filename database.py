@@ -18,7 +18,10 @@ class Database:
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                     result_text TEXT NOT NULL,
                     num_images INTEGER DEFAULT 3,
-                    summary TEXT
+                    summary TEXT,
+                    z5_score REAL,
+                    gex_flip_zone REAL,
+                    max_pain REAL
                 )
             ''')
             await conn.execute('''
@@ -31,11 +34,11 @@ class Database:
             ''')
             await conn.commit()
 
-    async def save_analysis(self, user_id, result_text, num_images=3, summary=None):
+    async def save_analysis(self, user_id, result_text, num_images=3, summary=None, z5=None, gex=None, max_pain=None):
         async with aiosqlite.connect(self.db_path) as conn:
             cursor = await conn.execute(
-                'INSERT INTO analysis_history (user_id, result_text, num_images, summary) VALUES (?, ?, ?, ?)',
-                (user_id, result_text, num_images, summary)
+                'INSERT INTO analysis_history (user_id, result_text, num_images, summary, z5_score, gex_flip_zone, max_pain) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                (user_id, result_text, num_images, summary, z5, gex, max_pain)
             )
             await conn.commit()
             return cursor.lastrowid
