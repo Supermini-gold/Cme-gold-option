@@ -16,6 +16,10 @@ import PIL.Image
 from database import Database
 from pdf_export import generate_pdf
 from image_export import generate_image
+try:
+    from quikstrike_scraper import fetch_quikstrike_data
+except ImportError:
+    fetch_quikstrike_data = None
 import matplotlib.pyplot as plt
 import pandas as pd
 import yfinance as yf
@@ -169,20 +173,11 @@ async def safe_reply(message, text):
 
 # ===================== CORE ANALYSIS =====================
 
-async def do_analysis(update, context, user_id, photos):
-    """Run Gemini analysis on the collected photos"""
-    count = len(photos)
-    await update.message.reply_text(
-        f"⏳ กำลังส่ง {count} ภาพให้ Gemini 2.5 Flash วิเคราะห์...\n"
-        "อาจใช้เวลา 10-30 วินาทีครับ"
-    )
-    await context.bot.send_chat_action(chat_id=user_id, action='typing')
-
+async def run_and_save_analysis(context, user_id, photos):
+    """Core logic to run analysis and save to DB/PDF"""
     try:
         if not gemini_client:
-            await update.message.reply_text("❌ ขาด Gemini API Key ในไฟล์ .env")
-            user_photos[user_id] = []
-            return
+            return None, "Missing Gemini API Key"
 
         images = [PIL.Image.open(io.BytesIO(pb)) for pb in photos]
         prompt = get_system_prompt()
@@ -204,53 +199,62 @@ async def do_analysis(update, context, user_id, photos):
             "timestamp": now_str,
         }
 
-        # Save to database
+        # Extract stats for DB
         summary = extract_summary(result)
         z5 = extract_z5_score(result)
         max_pain, gex = extract_key_levels(result)
         high_1sd, low_1sd = extract_expected_range(result)
         
-        analysis_id = await db.save_analysis(user_id, result, count, summary, z5, gex, max_pain, high_1sd, low_1sd)
+        analysis_id = await db.save_analysis(user_id, result, len(photos), summary, z5, gex, max_pain, high_1sd, low_1sd)
         await db.cleanup_old_history(user_id, keep_count=20)
 
-        # Send result with safe markdown
-        await safe_reply(update.message, result)
+        # Generate Image
+        img_bytes = generate_image(result, now_str)
+        
+        # Generate PDF
+        pdf_bytes = generate_pdf(result, now_str)
+        filename = f"Gold_Analysis_{analysis_id}_{now_str.split(' ')[0]}.pdf"
+        filepath = os.path.join("exports", filename)
+        with open(filepath, "wb") as f:
+            f.write(pdf_bytes)
 
-        # Auto-send Image
-        try:
-            await update.message.reply_text("🖼 กำลังสร้างรูปภาพสรุปผล...")
-            await context.bot.send_chat_action(chat_id=user_id, action='upload_photo')
-            img_bytes = generate_image(result, now_str)
-            await update.message.reply_photo(
-                photo=io.BytesIO(img_bytes),
-                caption=f"📊 สรุปผลวิเคราะห์ #{analysis_id}"
-            )
-        except Exception as img_e:
-            await update.message.reply_text(f"❌ สร้างรูปภาพไม่สำเร็จ: {str(img_e)}")
-
-        # Auto-save PDF to exports folder
-        try:
-            pdf_bytes = generate_pdf(result, now_str)
-            filename = f"Gold_Analysis_{analysis_id}_{now_str.split(' ')[0]}.pdf"
-            filepath = os.path.join("exports", filename)
-            with open(filepath, "wb") as f:
-                f.write(pdf_bytes)
-        except Exception as pdf_e:
-            print(f"⚠️ Auto-save PDF error: {pdf_e}")
-
-        # Footer with tips
-        await update.message.reply_text(
-            f"✅ บันทึกผลวิเคราะห์ #{analysis_id} แล้ว\n\n"
-            "💬 ส่งข้อความถามเพิ่มเติมได้เลย\n"
-            "📄 /export_pdf — ดาวน์โหลด PDF\n"
-            "📋 /history — ดูประวัติย้อนหลัง"
-        )
+        return {
+            "id": analysis_id,
+            "text": result,
+            "image_bytes": img_bytes,
+            "pdf_path": filepath
+        }, None
 
     except Exception as e:
-        await update.message.reply_text(f"❌ เกิดข้อผิดพลาดระหว่างวิเคราะห์: {str(e)}")
+        return None, str(e)
 
-    # Clear photos after analysis
+
+async def do_analysis(update, context, user_id, photos):
+    """Handler for manual photo collection analysis"""
+    count = len(photos)
+    await update.message.reply_text(
+        f"⏳ กำลังวิเคราะห์ {count} ภาพด้วย AI...\n"
+        "อาจใช้เวลา 10-30 วินาทีครับ"
+    )
+    await context.bot.send_chat_action(chat_id=user_id, action='typing')
+
+    data, err = await run_and_save_analysis(context, user_id, photos)
+    
+    # Reset queue
     user_photos[user_id] = []
+
+    if err:
+        await update.message.reply_text(f"❌ เกิดข้อผิดพลาด: {err}")
+        return
+
+    # Send result text
+    await safe_reply(update.message, data['text'])
+
+    # Send result image
+    await update.message.reply_photo(
+        photo=io.BytesIO(data['image_bytes']),
+        caption=f"📊 สรุปผลวิเคราะห์ #{data['id']}\n\nพิมพ์ /detail {data['id']} เพื่อดูผลเต็ม หรือถามต่อได้เลยครับ"
+    )
 
 
 # ===================== TRENDS & ALERTS =====================
@@ -428,6 +432,79 @@ async def debug_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         report += f"❌ **Database**: ล้มเหลว ({str(e)})\n"
 
     await update.message.reply_text(report)
+
+
+async def sync_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Manually trigger QuikStrike sync and analysis"""
+    if not fetch_quikstrike_data:
+        await update.message.reply_text("❌ ระบบ Auto-Sync ยังไม่พร้อมใช้งาน (ขาด dependencies)")
+        return
+        
+    user_id = update.message.chat_id
+    await update.message.reply_text("🔄 กำลังเชื่อมต่อ QuikStrike เพื่อดึงข้อมูลล่าสุด...")
+    
+    images, err = await fetch_quikstrike_data()
+    if err:
+        await update.message.reply_text(f"❌ ดึงข้อมูลไม่สำเร็จ: {err}")
+        return
+
+    await update.message.reply_text(f"✅ ดึงข้อมูลสำเร็จ ({len(images)} รูป) กำลังเริ่มวิเคราะห์...")
+    
+    # Read image bytes
+    image_bytes_list = []
+    for img_path in images:
+        with open(img_path, "rb") as f:
+            image_bytes_list.append(bytearray(f.read()))
+            
+    await do_analysis(update, context, user_id, image_bytes_list)
+
+
+async def auto_sync_job(context: ContextTypes.DEFAULT_TYPE):
+    """Background job for hourly auto-sync"""
+    if not fetch_quikstrike_data:
+        return
+        
+    # For now, we only auto-sync for the primary user if known, 
+    # or we can broadcast to all users who have active schedules.
+    schedules = await db.get_all_active_schedules()
+    if not schedules:
+        return
+
+    print("🤖 Starting Hourly Auto-Sync...")
+    images, err = await fetch_quikstrike_data()
+    
+    if err:
+        print(f"❌ Auto-Sync failed: {err}")
+        return
+
+    # Broadcast to all active users
+    for s in schedules:
+        uid = s['user_id']
+        try:
+            # We need a dummy update-like object for do_analysis
+            # or refactor do_analysis to accept bot/chat_id
+            image_bytes_list = []
+            for img_path in images:
+                with open(img_path, "rb") as f:
+                    image_bytes_list.append(bytearray(f.read()))
+            
+            # Send notification
+            await context.bot.send_message(chat_id=uid, text="🔄 **Auto-Sync**: พบข้อมูลใหม่จาก QuikStrike กำลังวิเคราะห์อัตโนมัติ...")
+            
+            data, a_err = await run_and_save_analysis(context, uid, image_bytes_list)
+            if a_err:
+                await context.bot.send_message(chat_id=uid, text=f"❌ Auto-Analysis failed: {a_err}")
+                continue
+
+            with open(data['image'], 'rb') as f:
+                await context.bot.send_photo(
+                    chat_id=uid,
+                    photo=f,
+                    caption=f"✅ **Auto-Sync Update** (ID: {data['id']})\n\nวิเคราะห์ข้อมูลล่าสุดรายชั่วโมงเรียบร้อยครับ"
+                )
+            
+        except Exception as e:
+            print(f"⚠️ Error sending auto-sync to {uid}: {e}")
 
 
 async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1002,6 +1079,14 @@ async def post_init(app):
         name="cot_fetch"
     )
 
+    # Start Hourly QuikStrike Auto-Sync
+    app.job_queue.run_repeating(
+        auto_sync_job,
+        interval=timedelta(hours=1),
+        first=timedelta(seconds=60),
+        name="quikstrike_sync"
+    )
+
     # Set bot commands menu
     await app.bot.set_my_commands([
         BotCommand("start", "เริ่มต้นใช้งาน"),
@@ -1013,6 +1098,7 @@ async def post_init(app):
         BotCommand("trend", "กราฟแนวโน้ม Sentiment"),
         BotCommand("stats", "สถิติความแม่นยำ"),
         BotCommand("backtest", "จำลองกำไรขาดทุนย้อนหลัง"),
+        BotCommand("sync", "ดึงข้อมูลจาก QuikStrike ทันที"),
         BotCommand("detail", "ดูผลเต็มตาม ID"),
         BotCommand("debug", "ตรวจสอบสถานะระบบ"),
         BotCommand("export", "ส่งรูปภาพผลวิเคราะห์"),
@@ -1049,6 +1135,7 @@ def main():
     app.add_handler(CommandHandler("trend", trend_cmd))
     app.add_handler(CommandHandler("stats", stats_cmd))
     app.add_handler(CommandHandler("backtest", backtest_cmd))
+    app.add_handler(CommandHandler("sync", sync_cmd))
     app.add_handler(CommandHandler("detail", detail_cmd))
     app.add_handler(CommandHandler("debug", debug_cmd))
     app.add_handler(CommandHandler("export", export_cmd))
