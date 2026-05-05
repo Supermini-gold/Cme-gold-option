@@ -11,7 +11,7 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     filters, ContextTypes
 )
-import google.generativeai as genai
+from google import genai
 import PIL.Image
 from database import Database
 from pdf_export import generate_pdf
@@ -28,10 +28,9 @@ BANGKOK_TZ = timezone(timedelta(hours=7))
 
 # Initialize Gemini
 if GEMINI_API_KEY and GEMINI_API_KEY != "your_gemini_api_key_here":
-    genai.configure(api_key=GEMINI_API_KEY)
-    gemini_model = genai.GenerativeModel('gemini-3-flash-preview')
+    gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 else:
-    gemini_model = None
+    gemini_client = None
 
 # Per-user state (in-memory)
 user_photos = {}
@@ -92,14 +91,17 @@ async def do_analysis(update, context, user_id, photos):
     await context.bot.send_chat_action(chat_id=user_id, action='typing')
 
     try:
-        if not gemini_model:
+        if not gemini_client:
             await update.message.reply_text("❌ ขาด Gemini API Key ในไฟล์ .env")
             user_photos[user_id] = []
             return
 
         images = [PIL.Image.open(io.BytesIO(pb)) for pb in photos]
         prompt = get_system_prompt()
-        response = gemini_model.generate_content([prompt] + images)
+        response = gemini_client.models.generate_content(
+            model='gemini-3-flash-preview',
+            contents=[prompt] + images
+        )
         result = response.text
 
         # Save context for follow-up chat
@@ -475,7 +477,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=user_id, action='typing')
 
     try:
-        if not gemini_model:
+        if not gemini_client:
             await update.message.reply_text("❌ ขาด Gemini API Key")
             return
 
@@ -490,7 +492,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "ตอบเป็นภาษาไทย กระชับ ตรงประเด็น อ้างอิงข้อมูลจากผลวิเคราะห์ข้างต้น"
         )
 
-        response = gemini_model.generate_content(followup_prompt)
+        response = gemini_client.models.generate_content(
+            model='gemini-3-flash-preview',
+            contents=followup_prompt
+        )
         await safe_reply(update.message, response.text)
 
     except Exception as e:
