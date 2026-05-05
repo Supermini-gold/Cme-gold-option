@@ -313,6 +313,86 @@ async def trend_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ ไม่สามารถสร้างกราฟได้: {str(e)}")
 
 
+async def backtest_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Simulate trading performance based on historical predictions"""
+    user_id = update.message.chat_id
+    await update.message.reply_text("📉 กำลังประมวลผลข้อมูลย้อนหลังและจำลองการเทรด...")
+    
+    async with aiosqlite.connect(db.db_path) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute('''
+            SELECT * FROM analysis_history 
+            WHERE range_high_1sd IS NOT NULL 
+            AND user_id = ?
+            ORDER BY timestamp ASC
+        ''', (user_id,))
+        records = await cursor.fetchall()
+
+    if len(records) < 2:
+        await update.message.reply_text("❌ ข้อมูลไม่เพียงพอสำหรับการทำ Backtest (ต้องการอย่างน้อย 2 รายการ)")
+        return
+
+    try:
+        gold = yf.Ticker("GC=F")
+        # Get history for the period of records
+        start_date = pd.to_datetime(records[0]['timestamp']).strftime('%Y-%m-%d')
+        hist = gold.history(start=start_date)
+    except Exception as e:
+        await update.message.reply_text(f"❌ ดึงข้อมูลราคาไม่สำเร็จ: {e}")
+        return
+
+    total_profit = 0
+    trades = 0
+    wins = 0
+    
+    # Simple Strategy: 
+    # - Sell at Range High, Buy at Range Low
+    # - Target: Midpoint of range
+    # - Size: 1 contract per trade ($10 per tick/point)
+    
+    report_lines = []
+    for row in records:
+        ts = pd.to_datetime(row['timestamp']).date()
+        day_data = hist[hist.index.date == ts]
+        if day_data.empty: continue
+
+        actual_high = day_data['High'].max()
+        actual_low = day_data['Low'].min()
+        r_high = row['range_high_1sd']
+        r_low = row['range_low_1sd']
+        mid = (r_high + r_low) / 2
+        
+        # Check for Short Opportunity (Price hits High)
+        if actual_high >= r_high:
+            profit = r_high - mid # Profit from Shorting at High to Mid
+            total_profit += profit
+            trades += 1
+            if profit > 0: wins += 1
+            report_lines.append(f"📅 {ts}: Short @{r_high} ✅ +{profit:.2f}")
+
+        # Check for Long Opportunity (Price hits Low)
+        elif actual_low <= r_low:
+            profit = mid - r_low # Profit from Buying at Low to Mid
+            total_profit += profit
+            trades += 1
+            if profit > 0: wins += 1
+            report_lines.append(f"📅 {ts}: Long @{r_low} ✅ +{profit:.2f}")
+
+    win_rate = (wins / trades * 100) if trades > 0 else 0
+    pnl_dollars = total_profit * 100 # Assume $100 per full point for simplification
+    
+    summary = (
+        f"📊 **Backtest Simulation Report**\n\n"
+        f"🎯 จำนวนการเข้าเทรด: {trades} ครั้ง\n"
+        f"🏆 ชนะ: {wins} ครั้ง ({win_rate:.1f}%)\n"
+        f"💰 กำไรสะสม: ${pnl_dollars:,.2f}\n"
+        f"📈 กำไรเฉลี่ยต่อไม้: {total_profit/trades:.2f} pts\n\n"
+        f"**รายละเอียด 5 ไม้ล่าสุด:**\n" + "\n".join(report_lines[-5:])
+    )
+    
+    await update.message.reply_text(summary)
+
+
 async def debug_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Diagnose connection issues"""
     user_id = update.message.chat_id
@@ -932,6 +1012,7 @@ async def post_init(app):
         BotCommand("history", "ประวัติวิเคราะห์"),
         BotCommand("trend", "กราฟแนวโน้ม Sentiment"),
         BotCommand("stats", "สถิติความแม่นยำ"),
+        BotCommand("backtest", "จำลองกำไรขาดทุนย้อนหลัง"),
         BotCommand("detail", "ดูผลเต็มตาม ID"),
         BotCommand("debug", "ตรวจสอบสถานะระบบ"),
         BotCommand("export", "ส่งรูปภาพผลวิเคราะห์"),
@@ -967,6 +1048,7 @@ def main():
     app.add_handler(CommandHandler("history", history_cmd))
     app.add_handler(CommandHandler("trend", trend_cmd))
     app.add_handler(CommandHandler("stats", stats_cmd))
+    app.add_handler(CommandHandler("backtest", backtest_cmd))
     app.add_handler(CommandHandler("detail", detail_cmd))
     app.add_handler(CommandHandler("debug", debug_cmd))
     app.add_handler(CommandHandler("export", export_cmd))
