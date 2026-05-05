@@ -85,7 +85,7 @@ async def do_analysis(update, context, user_id, photos):
     """Run Gemini analysis on the collected photos"""
     count = len(photos)
     await update.message.reply_text(
-        f"⏳ กำลังส่ง {count} ภาพให้ Gemini 3 Flash วิเคราะห์...\n"
+        f"⏳ กำลังส่ง {count} ภาพให้ Gemini 2.5 Flash วิเคราะห์...\n"
         "อาจใช้เวลา 10-30 วินาทีครับ"
     )
     await context.bot.send_chat_action(chat_id=user_id, action='typing')
@@ -99,7 +99,7 @@ async def do_analysis(update, context, user_id, photos):
         images = [PIL.Image.open(io.BytesIO(pb)) for pb in photos]
         prompt = get_system_prompt()
         response = gemini_client.models.generate_content(
-            model='gemini-3-flash-preview',
+            model='gemini-2.5-flash',
             contents=[prompt] + images
         )
         result = response.text
@@ -158,7 +158,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "1. ส่งภาพหน้าจอ QuikStrike (Volume, OI, OI Change)\n"
         "2. ส่งครบ 3 รูป → วิเคราะห์อัตโนมัติ\n"
         "   หรือส่งกี่รูปก็ได้แล้วพิมพ์ /analyze\n"
-        "3. รอ Gemini 3 Flash วิเคราะห์ ~10-30 วินาที\n"
+        "3. รอ Gemini 2.5 Flash วิเคราะห์ ~10-30 วินาที\n"
         "4. ถามคำถามเพิ่มเติมได้ ส่งข้อความมาเลย!\n\n"
         "📋 พิมพ์ /help เพื่อดูคำสั่งทั้งหมดครับ"
     )
@@ -493,7 +493,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         response = gemini_client.models.generate_content(
-            model='gemini-3-flash-preview',
+            model='gemini-2.5-flash',
             contents=followup_prompt
         )
         await safe_reply(update.message, response.text)
