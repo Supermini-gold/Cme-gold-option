@@ -29,7 +29,7 @@ BANGKOK_TZ = timezone(timedelta(hours=7))
 # Initialize Gemini
 if GEMINI_API_KEY and GEMINI_API_KEY != "your_gemini_api_key_here":
     genai.configure(api_key=GEMINI_API_KEY)
-    gemini_model = genai.GenerativeModel('gemini-1.5-pro')
+    gemini_model = genai.GenerativeModel('gemini-3-flash-preview')
 else:
     gemini_model = None
 
@@ -86,7 +86,7 @@ async def do_analysis(update, context, user_id, photos):
     """Run Gemini analysis on the collected photos"""
     count = len(photos)
     await update.message.reply_text(
-        f"⏳ กำลังส่ง {count} ภาพให้ Gemini 2.5 Flash วิเคราะห์...\n"
+        f"⏳ กำลังส่ง {count} ภาพให้ Gemini 3 Flash วิเคราะห์...\n"
         "อาจใช้เวลา 10-30 วินาทีครับ"
     )
     await context.bot.send_chat_action(chat_id=user_id, action='typing')
@@ -156,7 +156,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "1. ส่งภาพหน้าจอ QuikStrike (Volume, OI, OI Change)\n"
         "2. ส่งครบ 3 รูป → วิเคราะห์อัตโนมัติ\n"
         "   หรือส่งกี่รูปก็ได้แล้วพิมพ์ /analyze\n"
-        "3. รอ Gemini 2.5 Flash วิเคราะห์ ~10-30 วินาที\n"
+        "3. รอ Gemini 3 Flash วิเคราะห์ ~10-30 วินาที\n"
         "4. ถามคำถามเพิ่มเติมได้ ส่งข้อความมาเลย!\n\n"
         "📋 พิมพ์ /help เพื่อดูคำสั่งทั้งหมดครับ"
     )
