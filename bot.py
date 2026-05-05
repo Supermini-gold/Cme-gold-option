@@ -29,7 +29,7 @@ BANGKOK_TZ = timezone(timedelta(hours=7))
 # Initialize Gemini
 if GEMINI_API_KEY and GEMINI_API_KEY != "your_gemini_api_key_here":
     genai.configure(api_key=GEMINI_API_KEY)
-    gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+    gemini_model = genai.GenerativeModel('gemini-1.5-pro')
 else:
     gemini_model = None
 
