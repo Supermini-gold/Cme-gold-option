@@ -29,6 +29,8 @@ class Database:
                     user_id INTEGER PRIMARY KEY,
                     interval_hours INTEGER NOT NULL DEFAULT 3,
                     is_active BOOLEAN DEFAULT 1,
+                    reminders_enabled BOOLEAN DEFAULT 1,
+                    alerts_enabled BOOLEAN DEFAULT 1,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
@@ -76,14 +78,17 @@ class Database:
             )
             return await cursor.fetchone()
 
-    async def save_schedule(self, user_id, interval_hours=3):
+    async def save_schedule(self, user_id, interval_hours=3, reminders=True, alerts=True):
         async with aiosqlite.connect(self.db_path) as conn:
             await conn.execute(
-                '''INSERT INTO schedules (user_id, interval_hours, is_active)
-                   VALUES (?, ?, 1)
+                '''INSERT INTO schedules (user_id, interval_hours, is_active, reminders_enabled, alerts_enabled)
+                   VALUES (?, ?, 1, ?, ?)
                    ON CONFLICT(user_id) DO UPDATE SET
-                   interval_hours = excluded.interval_hours, is_active = 1''',
-                (user_id, interval_hours)
+                   interval_hours = excluded.interval_hours, 
+                   is_active = 1,
+                   reminders_enabled = excluded.reminders_enabled,
+                   alerts_enabled = excluded.alerts_enabled''',
+                (user_id, interval_hours, reminders, alerts)
             )
             await conn.commit()
 

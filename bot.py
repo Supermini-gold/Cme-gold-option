@@ -260,6 +260,10 @@ async def check_price_alerts(context: ContextTypes.DEFAULT_TYPE):
         return
 
     for uid in user_ids:
+        sched = await db.get_schedule(uid)
+        if not sched or not sched['alerts_enabled']:
+            continue
+            
         record = await db.get_latest_analysis(uid)
         if not record or (record['gex_flip_zone'] is None and record['max_pain'] is None):
             continue
@@ -478,11 +482,11 @@ async def export_pdf_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ===================== SCHEDULE =====================
 
 async def schedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Enable reminder every 3 hours"""
+    """Enable reminder every 3 hours (and price alerts)"""
     user_id = update.message.chat_id
 
-    # Save to DB
-    await db.save_schedule(user_id, interval_hours=3)
+    # Save to DB (both enabled by default)
+    await db.save_schedule(user_id, interval_hours=3, reminders=True, alerts=True)
 
     # Remove old job if exists
     current_jobs = context.job_queue.get_jobs_by_name(f"reminder_{user_id}")
@@ -500,10 +504,47 @@ async def schedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     await update.message.reply_text(
-        "⏰ เปิดการเตือนแล้ว!\n\n"
-        "📌 บอทจะเตือนให้ส่งรูปวิเคราะห์ทุก 3 ชั่วโมง\n"
-        "🔕 พิมพ์ /schedule_off เพื่อปิด"
+        "⏰ เปิดระบบแจ้งเตือนแล้ว!\n\n"
+        "✅ แจ้งเตือนส่งรูปทุก 3 ชม.: เปิด\n"
+        "✅ แจ้งเตือนราคาทอง (GEX/Max Pain): เปิด\n\n"
+        "📌 จัดการแยกกันได้ด้วย:\n"
+        "/reminders_off — ปิดเตือนส่งรูป\n"
+        "/alerts_off — ปิดเตือนราคา\n"
+        "/schedule_off — ปิดทั้งหมด"
     )
+
+
+async def reminders_off_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Disable only 3-hour reminders"""
+    user_id = update.message.chat_id
+    sched = await db.get_schedule(user_id)
+    if sched:
+        await db.save_schedule(user_id, sched['interval_hours'], reminders=False, alerts=sched['alerts_enabled'])
+        await update.message.reply_text("🔕 ปิดการเตือนส่งรูปทุก 3 ชม. แล้วครับ (แต่ยังเตือนราคาอยู่)")
+    else:
+        await update.message.reply_text("❌ คุณยังไม่ได้เปิดระบบแจ้งเตือน พิมพ์ /schedule เพื่อเริ่ม")
+
+
+async def alerts_off_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Disable only price alerts"""
+    user_id = update.message.chat_id
+    sched = await db.get_schedule(user_id)
+    if sched:
+        await db.save_schedule(user_id, sched['interval_hours'], reminders=sched['reminders_enabled'], alerts=False)
+        await update.message.reply_text("🔕 ปิดการเตือนราคาทองแล้วครับ (แต่ยังเตือนส่งรูปอยู่)")
+    else:
+        await update.message.reply_text("❌ คุณยังไม่ได้เปิดระบบแจ้งเตือน พิมพ์ /schedule เพื่อเริ่ม")
+
+
+async def alerts_on_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Enable price alerts"""
+    user_id = update.message.chat_id
+    sched = await db.get_schedule(user_id)
+    if sched:
+        await db.save_schedule(user_id, sched['interval_hours'], reminders=sched['reminders_enabled'], alerts=True)
+    else:
+        await db.save_schedule(user_id, interval_hours=3, reminders=False, alerts=True)
+    await update.message.reply_text("🔔 เปิดการเตือนราคาทอง (GEX/Max Pain) เรียบร้อยครับ")
 
 
 async def schedule_off_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -524,15 +565,19 @@ async def schedule_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
     sched = await db.get_schedule(user_id)
 
     if sched:
+        rem_status = "เปิด ✅" if sched['reminders_enabled'] else "ปิด ❌"
+        alert_status = "เปิด ✅" if sched['alerts_enabled'] else "ปิด ❌"
         await update.message.reply_text(
-            f"⏰ สถานะ: เปิดอยู่\n"
-            f"🔁 เตือนทุก {sched['interval_hours']} ชั่วโมง\n"
-            f"🔕 /schedule_off เพื่อปิด"
+            f"⏰ **สถานะระบบแจ้งเตือน**\n\n"
+            f"📸 เตือนส่งรูป (3 ชม.): {rem_status}\n"
+            f"🔔 เตือนราคาทอง: {alert_status}\n\n"
+            f"🔁 ความถี่หลัก: ทุก {sched['interval_hours']} ชั่วโมง\n"
+            f"🔕 /schedule_off เพื่อปิดทั้งหมด"
         )
     else:
         await update.message.reply_text(
-            "🔕 สถานะ: ปิดอยู่\n"
-            "⏰ /schedule เพื่อเปิดเตือนทุก 3 ชม."
+            "🔕 สถานะ: ปิดอยู่ทั้งหมด\n"
+            "⏰ /schedule เพื่อเปิดระบบ"
         )
 
 
@@ -540,6 +585,12 @@ async def send_reminder(context: ContextTypes.DEFAULT_TYPE):
     """Callback for scheduled reminder"""
     job = context.job
     chat_id = job.chat_id
+    
+    # Check if reminders are enabled for this user
+    sched = await db.get_schedule(chat_id)
+    if not sched or not sched['reminders_enabled']:
+        return
+
     now = datetime.now(BANGKOK_TZ).strftime('%H:%M')
     await context.bot.send_message(
         chat_id=chat_id,
@@ -672,8 +723,11 @@ async def post_init(app):
         BotCommand("detail", "ดูผลเต็มตาม ID"),
         BotCommand("export", "ส่งรูปภาพผลวิเคราะห์"),
         BotCommand("export_pdf", "ส่ง PDF ผลวิเคราะห์"),
-        BotCommand("schedule", "เปิดเตือนทุก 3 ชม."),
-        BotCommand("schedule_off", "ปิดการเตือน"),
+        BotCommand("schedule", "เปิดระบบแจ้งเตือน"),
+        BotCommand("alerts_on", "เปิดเตือนราคาทอง"),
+        BotCommand("alerts_off", "ปิดเตือนราคาทอง"),
+        BotCommand("reminders_off", "ปิดเตือนส่งรูป 3 ชม."),
+        BotCommand("schedule_off", "ปิดการเตือนทั้งหมด"),
         BotCommand("schedule_status", "ดูสถานะเตือน"),
     ])
 
@@ -697,6 +751,9 @@ def main():
     app.add_handler(CommandHandler("export", export_cmd))
     app.add_handler(CommandHandler("export_pdf", export_pdf_cmd))
     app.add_handler(CommandHandler("schedule", schedule_cmd))
+    app.add_handler(CommandHandler("alerts_on", alerts_on_cmd))
+    app.add_handler(CommandHandler("alerts_off", alerts_off_cmd))
+    app.add_handler(CommandHandler("reminders_off", reminders_off_cmd))
     app.add_handler(CommandHandler("schedule_off", schedule_off_cmd))
     app.add_handler(CommandHandler("schedule_status", schedule_status_cmd))
 
