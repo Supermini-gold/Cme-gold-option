@@ -313,7 +313,41 @@ async def trend_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ ไม่สามารถสร้างกราฟได้: {str(e)}")
 
 
-async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def debug_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Diagnose connection issues"""
+    user_id = update.message.chat_id
+    await update.message.reply_text("🔍 เริ่มการตรวจสอบระบบ...")
+    
+    report = "🛠 **Bot Diagnostic Report**\n\n"
+    
+    # 1. Check Gemini
+    try:
+        test_model = 'gemini-flash-latest'
+        response = gemini_client.models.generate_content(
+            model=test_model,
+            contents="Connection test. Reply 'OK'."
+        )
+        report += f"✅ **Gemini API**: เชื่อมต่อได้ (Model: {test_model})\n"
+        report += f"💬 Response: {response.text}\n"
+    except Exception as e:
+        report += f"❌ **Gemini API**: ล้มเหลว\nError: {str(e)}\n"
+
+    # 2. Check Macro Data
+    try:
+        gold = yf.Ticker("GC=F")
+        price = gold.history(period="1d")['Close'].iloc[-1]
+        report += f"✅ **Market Data (yfinance)**: เชื่อมต่อได้ (Gold: {price:.2f})\n"
+    except Exception as e:
+        report += f"❌ **Market Data**: ล้มเหลว ({str(e)})\n"
+
+    # 3. Check DB
+    try:
+        await db.get_macro_data("cot_summary")
+        report += f"✅ **Database**: ใช้งานได้ปกติ\n"
+    except Exception as e:
+        report += f"❌ **Database**: ล้มเหลว ({str(e)})\n"
+
+    await update.message.reply_text(report)
     """View bot performance statistics"""
     user_id = update.message.chat_id
     stats = await db.get_performance_stats(user_id)
@@ -896,6 +930,7 @@ async def post_init(app):
         BotCommand("trend", "กราฟแนวโน้ม Sentiment"),
         BotCommand("stats", "สถิติความแม่นยำ"),
         BotCommand("detail", "ดูผลเต็มตาม ID"),
+        BotCommand("debug", "ตรวจสอบสถานะระบบ"),
         BotCommand("export", "ส่งรูปภาพผลวิเคราะห์"),
         BotCommand("export_pdf", "ส่ง PDF ผลวิเคราะห์"),
         BotCommand("schedule", "เปิดระบบแจ้งเตือน"),
@@ -930,6 +965,7 @@ def main():
     app.add_handler(CommandHandler("trend", trend_cmd))
     app.add_handler(CommandHandler("stats", stats_cmd))
     app.add_handler(CommandHandler("detail", detail_cmd))
+    app.add_handler(CommandHandler("debug", debug_cmd))
     app.add_handler(CommandHandler("export", export_cmd))
     app.add_handler(CommandHandler("export_pdf", export_pdf_cmd))
     app.add_handler(CommandHandler("schedule", schedule_cmd))
