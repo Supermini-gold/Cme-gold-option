@@ -15,6 +15,7 @@ import google.generativeai as genai
 import PIL.Image
 from database import Database
 from pdf_export import generate_pdf
+from image_export import generate_image
 
 # Load environment variables
 env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
@@ -28,7 +29,7 @@ BANGKOK_TZ = timezone(timedelta(hours=7))
 # Initialize Gemini
 if GEMINI_API_KEY and GEMINI_API_KEY != "your_gemini_api_key_here":
     genai.configure(api_key=GEMINI_API_KEY)
-    gemini_model = genai.GenerativeModel('gemini-2.5-flash')
+    gemini_model = genai.GenerativeModel('gemini-1.5-flash')
 else:
     gemini_model = None
 
@@ -116,11 +117,23 @@ async def do_analysis(update, context, user_id, photos):
         # Send result with safe markdown
         await safe_reply(update.message, result)
 
+        # Auto-send Image
+        try:
+            await update.message.reply_text("🖼 กำลังสร้างรูปภาพสรุปผล...")
+            await context.bot.send_chat_action(chat_id=user_id, action='upload_photo')
+            img_bytes = generate_image(result, now_str)
+            await update.message.reply_photo(
+                photo=io.BytesIO(img_bytes),
+                caption=f"📊 สรุปผลวิเคราะห์ #{analysis_id}"
+            )
+        except Exception as img_e:
+            await update.message.reply_text(f"❌ สร้างรูปภาพไม่สำเร็จ: {str(img_e)}")
+
         # Footer with tips
         await update.message.reply_text(
             f"✅ บันทึกผลวิเคราะห์ #{analysis_id} แล้ว\n\n"
             "💬 ส่งข้อความถามเพิ่มเติมได้เลย\n"
-            "📄 /export — ดาวน์โหลด PDF\n"
+            "📄 /export_pdf — ดาวน์โหลด PDF\n"
             "📋 /history — ดูประวัติย้อนหลัง"
         )
 
@@ -161,8 +174,8 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔹 ประวัติ & ส่งออก\n"
         "/history — ดู 10 ผลวิเคราะห์ล่าสุด\n"
         "/detail <ID> — ดูผลวิเคราะห์เต็มตาม ID\n"
-        "/export — ส่ง PDF ผลวิเคราะห์ล่าสุด\n"
-        "/export <ID> — ส่ง PDF ตาม ID\n\n"
+        "/export — ส่งรูปภาพผลวิเคราะห์ล่าสุด\n"
+        "/export_pdf <ID> — ส่ง PDF ตาม ID\n\n"
         "🔹 ตั้งเวลาเตือน\n"
         "/schedule — เปิดเตือนทุก 3 ชม.\n"
         "/schedule_off — ปิดการเตือน\n"
@@ -247,9 +260,41 @@ async def detail_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await safe_reply(update.message, header + record['result_text'])
 
 
-# ===================== PDF EXPORT =====================
+# ===================== IMAGE & PDF EXPORT =====================
 
 async def export_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Export analysis as Image"""
+    user_id = update.message.chat_id
+    args = context.args
+
+    if args:
+        try:
+            analysis_id = int(args[0])
+            record = await db.get_analysis_by_id(analysis_id, user_id)
+        except ValueError:
+            await update.message.reply_text("❌ ID ต้องเป็นตัวเลข เช่น /export 5")
+            return
+    else:
+        record = await db.get_latest_analysis(user_id)
+
+    if not record:
+        await update.message.reply_text("❌ ไม่พบผลวิเคราะห์ ส่งรูปมาวิเคราะห์ก่อนนะครับ")
+        return
+
+    await update.message.reply_text("🖼 กำลังสร้างรูปภาพ...")
+    await context.bot.send_chat_action(chat_id=user_id, action='upload_photo')
+
+    try:
+        img_bytes = generate_image(record['result_text'], record['timestamp'])
+        await update.message.reply_photo(
+            photo=io.BytesIO(img_bytes),
+            caption=f"📊 Gold Options Analysis Report #{record['id']}"
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ สร้างรูปภาพไม่สำเร็จ: {str(e)}")
+
+
+async def export_pdf_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Export analysis as PDF"""
     user_id = update.message.chat_id
     args = context.args
@@ -260,7 +305,7 @@ async def export_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             analysis_id = int(args[0])
             record = await db.get_analysis_by_id(analysis_id, user_id)
         except ValueError:
-            await update.message.reply_text("❌ ID ต้องเป็นตัวเลข เช่น /export 5")
+            await update.message.reply_text("❌ ID ต้องเป็นตัวเลข เช่น /export_pdf 5")
             return
     else:
         record = await db.get_latest_analysis(user_id)
@@ -468,7 +513,8 @@ async def post_init(app):
         BotCommand("status", "ดูจำนวนรูปในคิว"),
         BotCommand("history", "ประวัติวิเคราะห์"),
         BotCommand("detail", "ดูผลเต็มตาม ID"),
-        BotCommand("export", "ส่ง PDF"),
+        BotCommand("export", "ส่งรูปภาพผลวิเคราะห์"),
+        BotCommand("export_pdf", "ส่ง PDF ผลวิเคราะห์"),
         BotCommand("schedule", "เปิดเตือนทุก 3 ชม."),
         BotCommand("schedule_off", "ปิดการเตือน"),
         BotCommand("schedule_status", "ดูสถานะเตือน"),
@@ -491,6 +537,7 @@ def main():
     app.add_handler(CommandHandler("history", history_cmd))
     app.add_handler(CommandHandler("detail", detail_cmd))
     app.add_handler(CommandHandler("export", export_cmd))
+    app.add_handler(CommandHandler("export_pdf", export_pdf_cmd))
     app.add_handler(CommandHandler("schedule", schedule_cmd))
     app.add_handler(CommandHandler("schedule_off", schedule_off_cmd))
     app.add_handler(CommandHandler("schedule_status", schedule_status_cmd))

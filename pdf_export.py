@@ -75,14 +75,36 @@ class GoldReportPDF(FPDF):
         """Add body text"""
         self.set_font('Sarabun', '', 10)
         self.set_text_color(50, 50, 55)
-        self.multi_cell(0, 5.5, text)
+        wrapped_text = wrap_thai_text(self, text, 155)
+        self.multi_cell(0, 5.5, wrapped_text)
 
     def bullet_text(self, text):
         """Add indented bullet text"""
         self.set_font('Sarabun', '', 10)
         self.set_text_color(60, 60, 65)
         self.set_x(15)
-        self.multi_cell(180, 5.5, text)
+        wrapped_text = wrap_thai_text(self, text, 175)
+        self.multi_cell(180, 5.5, wrapped_text)
+
+def wrap_thai_text(pdf, text, max_width):
+    """Manually wrap text to max_width to prevent FPDF2 crash with long Thai strings"""
+    result = ""
+    current_line = ""
+    for char in text:
+        if char == '\n':
+            result += current_line + char
+            current_line = ""
+            continue
+            
+        is_combining = ('\u0E31' <= char <= '\u0E3A') or ('\u0E47' <= char <= '\u0E4E')
+        if not is_combining and current_line and pdf.get_string_width(current_line + char) > max_width:
+            result += current_line + '\n'
+            current_line = char
+        else:
+            current_line += char
+    result += current_line
+    return result
+
 
 
 def strip_emoji(text):
