@@ -192,7 +192,7 @@ async def do_analysis(update, context, user_id, photos):
         full_prompt = f"{prompt}\n\n{macro_ctx}\n\nโปรดวิเคราะห์รูปภาพที่แนบมาโดยใช้ข้อมูล Macro ข้างต้นประกอบด้วย"
         
         response = gemini_client.models.generate_content(
-            model='gemini-2.0-flash',
+            model='gemini-flash-latest',
             contents=[full_prompt] + images
         )
         result = response.text
@@ -842,7 +842,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         response = gemini_client.models.generate_content(
-            model='gemini-2.0-flash',
+            model='gemini-flash-latest',
             contents=followup_prompt
         )
         await safe_reply(update.message, response.text)
