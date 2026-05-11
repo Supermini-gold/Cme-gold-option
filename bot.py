@@ -3,6 +3,7 @@ import io
 import re
 import asyncio
 import sys
+import aiosqlite
 sys.stdout.reconfigure(encoding='utf-8')
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
@@ -187,7 +188,7 @@ async def run_and_save_analysis(context, user_id, photos):
         full_prompt = f"{prompt}\n\n{macro_ctx}\n\nโปรดวิเคราะห์รูปภาพที่แนบมาโดยใช้ข้อมูล Macro ข้างต้นประกอบด้วย"
         
         response = gemini_client.models.generate_content(
-            model='gemini-flash-latest',
+            model='gemini-2.0-flash',
             contents=[full_prompt] + images
         )
         result = response.text
@@ -406,7 +407,7 @@ async def debug_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # 1. Check Gemini
     try:
-        test_model = 'gemini-flash-latest'
+        test_model = 'gemini-2.0-flash'
         response = gemini_client.models.generate_content(
             model=test_model,
             contents="Connection test. Reply 'OK'."
@@ -496,12 +497,11 @@ async def auto_sync_job(context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(chat_id=uid, text=f"❌ Auto-Analysis failed: {a_err}")
                 continue
 
-            with open(data['image'], 'rb') as f:
-                await context.bot.send_photo(
-                    chat_id=uid,
-                    photo=f,
-                    caption=f"✅ **Auto-Sync Update** (ID: {data['id']})\n\nวิเคราะห์ข้อมูลล่าสุดรายชั่วโมงเรียบร้อยครับ"
-                )
+            await context.bot.send_photo(
+                chat_id=uid,
+                photo=io.BytesIO(data['image_bytes']),
+                caption=f"✅ **Auto-Sync Update** (ID: {data['id']})\n\nวิเคราะห์ข้อมูลล่าสุดรายชั่วโมงเรียบร้อยครับ"
+            )
             
         except Exception as e:
             print(f"⚠️ Error sending auto-sync to {uid}: {e}")
@@ -1036,7 +1036,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         response = gemini_client.models.generate_content(
-            model='gemini-flash-latest',
+            model='gemini-2.0-flash',
             contents=followup_prompt
         )
         await safe_reply(update.message, response.text)
