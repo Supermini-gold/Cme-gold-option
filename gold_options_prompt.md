@@ -132,8 +132,9 @@ Z5 = (Z1 × 0.3) + (Z2_net × 0.25) + (Z3_bias × 0.2) + (Z4 × 0.25)
   - ระบุแค่ IV ATM ที่อ่านได้ เพื่อใช้คำนวณ Expected Move เท่านั้น
 
 - **GEX**: ระบุ Flip Zone, Dealer Position (Long/Short Gamma), Hedging Pressure
-  - Put Wall ใหญ่ = Dealer Long Gamma → ดูด/ต้านราคา
-  - ถ้าราคาหลุด Put Wall = Dealer Flip → เร่งลง
+  - Put Wall ใหญ่ = Dealer Long Gamma → ดูด/ต้านราคา (Price Pinning)
+  - ถ้าราคาหลุด Put Wall = Dealer Flip to Short Gamma → เร่งตัว (Volatility Expansion)
+  - คำนวณ GEX Flip Level โดยอิงจาก Strike ที่มี OI Change สูงสุดฝั่ง Put
 
 ---
 
@@ -162,6 +163,8 @@ Z5 = (Z1 × 0.3) + (Z2_net × 0.25) + (Z3_bias × 0.2) + (Z4 × 0.25)
   - ยิ่งมีสัญญาณมาก = Institutional Conviction สูง
 
 - **Pin Risk Assessment**: ระบุ Strike ที่มีโอกาส Pin สูงสุดพร้อมเหตุผล
+  - Pin High Probability: เมื่อ Max Pain, Gamma Pin, และ High Volume Strike อยู่ที่เดียวกัน
+  - Pin Magnitude: [สูง/กลาง/ต่ำ] อิงจาก Concentration Ratio ใน Z3
 
 ---
 

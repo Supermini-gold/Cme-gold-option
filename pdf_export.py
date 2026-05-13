@@ -110,9 +110,15 @@ def wrap_thai_text(pdf, text, max_width):
 def strip_emoji(text):
     """Remove emoji characters for cleaner PDF"""
     emoji_pattern = re.compile(
-        "[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF"
-        "\U0001F1E0-\U0001F1FF\U00002702-\U000027B0\U0001F900-\U0001F9FF"
-        "\U00002600-\U000026FF\U00002B50-\U00002B55\U0001FA00-\U0001FA6F]+",
+        "["
+        "\U0001F000-\U0001F9FF"
+        "\U0001FA00-\U0001FAFF"
+        "\U00002600-\U000026FF"
+        "\U00002700-\U000027BF"
+        "\U0001F1E0-\U0001F1FF"
+        "\uFE00-\uFE0F"
+        "\u2000-\u2BFF"
+        "]+",
         flags=re.UNICODE
     )
     return emoji_pattern.sub('', text)

@@ -11,17 +11,15 @@ FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fonts')
 def strip_emoji(text):
     """Remove emoji/symbol unicode blocks that Sarabun font cannot render"""
     emoji_pattern = re.compile(
-        "[\U0001F600-\U0001F64F"
-        "\U0001F300-\U0001F5FF"
-        "\U0001F680-\U0001F6FF"
-        "\U0001F1E0-\U0001F1FF"
-        "\U00002702-\U000027B0"
-        "\U0001F900-\U0001F9FF"
-        "\U00002600-\U000026FF"
-        "\U00002B50-\U00002B55"
-        "\U0001FA00-\U0001FA6F"
-        "\U0001F004-\U0001F0CF"
-        "\U0001F170-\U0001F251]+",
+        "["
+        "\U0001F000-\U0001F9FF"  # Miscellaneous Symbols and Pictographs, Emoticons, etc.
+        "\U0001FA00-\U0001FAFF"  # Symbols and Pictographs Extended-A
+        "\U00002600-\U000026FF"  # Miscellaneous Symbols
+        "\U00002700-\U000027BF"  # Dingbats
+        "\U0001F1E0-\U0001F1FF"  # Flags
+        "\uFE00-\uFE0F"          # Variation Selectors
+        "\u2000-\u2BFF"          # Arrows, symbols, etc.
+        "]+",
         flags=re.UNICODE
     )
     return emoji_pattern.sub('', text)

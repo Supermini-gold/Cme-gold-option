@@ -3,3 +3,14 @@ __pycache__/
 *.pyc
 out.txt
 models.txt
+bot_data.db
+*.log
+*.png
+exports/
+scratch/
+test.pdf
+test_premium_fix.pdf
+test_wrap.pdf
+test_wrap2.pdf
+test_zws.pdf
+chat_id.txt

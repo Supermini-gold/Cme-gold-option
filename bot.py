@@ -42,6 +42,10 @@ if GEMINI_API_KEY and GEMINI_API_KEY != "your_gemini_api_key_here":
 else:
     gemini_client = None
 
+# Working Hours (Bangkok Time)
+START_HOUR = int(os.getenv("START_HOUR", 8))
+END_HOUR = int(os.getenv("END_HOUR", 22))
+
 # Per-user state (in-memory)
 user_photos = {}
 user_context = {}  # {user_id: {"last_analysis": str, "timestamp": str}}
@@ -180,6 +184,25 @@ async def run_and_save_analysis(context, user_id, photos):
         if not gemini_client:
             return None, "Missing Gemini API Key"
 
+        async def generate_with_retry(contents, model_name='gemini-2.0-flash', max_retries=3):
+            for i in range(max_retries):
+                try:
+                    # Note: genai SDK is synchronous, so we run in executor if needed, 
+                    # but here we just try-except.
+                    resp = gemini_client.models.generate_content(
+                        model=model_name,
+                        contents=contents
+                    )
+                    return resp, None
+                except Exception as e:
+                    if "429" in str(e) and i < max_retries - 1:
+                        wait_time = (i + 1) * 2
+                        print(f"⚠️ Quota hit (429). Retrying in {wait_time}s... (Attempt {i+1}/{max_retries})")
+                        await asyncio.sleep(wait_time)
+                        continue
+                    return None, str(e)
+            return None, "Max retries exceeded"
+
         images = [PIL.Image.open(io.BytesIO(pb)) for pb in photos]
         prompt = get_system_prompt()
         
@@ -187,10 +210,10 @@ async def run_and_save_analysis(context, user_id, photos):
         macro_ctx = await get_macro_context()
         full_prompt = f"{prompt}\n\n{macro_ctx}\n\nโปรดวิเคราะห์รูปภาพที่แนบมาโดยใช้ข้อมูล Macro ข้างต้นประกอบด้วย"
         
-        response = gemini_client.models.generate_content(
-            model='gemini-2.0-flash',
-            contents=[full_prompt] + images
-        )
+        response, a_err = await generate_with_retry([full_prompt] + images)
+        if a_err:
+            return None, a_err
+        
         result = response.text
 
         # Save context for follow-up chat
@@ -407,7 +430,7 @@ async def debug_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # 1. Check Gemini
     try:
-        test_model = 'gemini-2.0-flash'
+        test_model = 'gemini-flash-lite-latest'
         response = gemini_client.models.generate_content(
             model=test_model,
             contents="Connection test. Reply 'OK'."
@@ -472,6 +495,13 @@ async def auto_sync_job(context: ContextTypes.DEFAULT_TYPE):
         return
 
     print("🤖 Starting Hourly Auto-Sync...")
+    
+    # Check working hours
+    now = datetime.now(BANGKOK_TZ)
+    if not (START_HOUR <= now.hour < END_HOUR):
+        print(f"💤 Outside working hours ({now.hour:02d}:00), skipping auto-sync.")
+        return
+
     images, err = await fetch_quikstrike_data()
     
     if err:
@@ -1035,10 +1065,20 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "ตอบเป็นภาษาไทย กระชับ ตรงประเด็น อ้างอิงข้อมูลจากผลวิเคราะห์ข้างต้น"
         )
 
-        response = gemini_client.models.generate_content(
-            model='gemini-2.0-flash',
-            contents=followup_prompt
-        )
+        # Reuse the logic or a simpler one for follow-up
+        response = None
+        for i in range(3):
+            try:
+                response = gemini_client.models.generate_content(
+                    model='gemini-2.0-flash',
+                    contents=followup_prompt
+                )
+                break
+            except Exception as e:
+                if "429" in str(e) and i < 2:
+                    await asyncio.sleep((i + 1) * 2)
+                    continue
+                raise e
         await safe_reply(update.message, response.text)
 
     except Exception as e:
