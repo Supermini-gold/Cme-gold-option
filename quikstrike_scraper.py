@@ -38,7 +38,7 @@ async def fetch_quikstrike_data():
             # 1. Login Flow (Proven method)
             print("Logging in...")
             await page.goto("https://cmegroup.quikstrike.net/Account/Login.aspx")
-            await page.wait_for_load_state("networkidle")
+            await page.wait_for_load_state("domcontentloaded")
             
             try:
                 await page.get_by_text("Continue").first.click(timeout=10000)
@@ -79,13 +79,13 @@ async def fetch_quikstrike_data():
             # 3. Direct to Vol2Vol Gold Options
             print("Accessing Vol2Vol Gold Options...")
             # PID 40 is Gold, pf 6 is Vol2Vol often, but let's go to the main PID 40 first then click Vol2Vol
-            await page.goto("https://cmegroup-sso.quikstrike.net//User/QuikStrikeView.aspx?pid=40&pf=6", wait_until="networkidle")
-            await page.wait_for_timeout(5000)
+            await page.goto("https://cmegroup-sso.quikstrike.net//User/QuikStrikeView.aspx?pid=40&pf=6", wait_until="domcontentloaded", timeout=60000)
+            await page.wait_for_timeout(15000)
 
             # Ensure we are on Vol2Vol tab
             try:
                 await page.get_by_role("link", name="QUIKOPTIONS VOL2VOL").click(timeout=5000)
-                await page.wait_for_timeout(5000)
+                await page.wait_for_timeout(10000)
             except: pass
 
             # 4. Capture 3 Views from the Sidebar within Vol2Vol
@@ -106,7 +106,7 @@ async def fetch_quikstrike_data():
             print("Capturing Intraday...")
             try:
                 await page.get_by_text("Intraday", exact=True).first.click(timeout=3000)
-                await page.wait_for_timeout(3000)
+                await page.wait_for_timeout(8000)
                 path = "qs_intraday.png"
                 await capture_optimized(path)
                 screenshots.append(path)
@@ -116,7 +116,7 @@ async def fetch_quikstrike_data():
             print("Capturing OI...")
             try:
                 await page.get_by_text("OI", exact=True).first.click(timeout=5000)
-                await page.wait_for_timeout(5000)
+                await page.wait_for_timeout(8000)
                 path = "qs_oi.png"
                 await capture_optimized(path)
                 screenshots.append(path)
@@ -126,7 +126,7 @@ async def fetch_quikstrike_data():
             print("Capturing OI Change...")
             try:
                 await page.get_by_text("OI Change", exact=True).first.click(timeout=5000)
-                await page.wait_for_timeout(5000)
+                await page.wait_for_timeout(8000)
                 path = "qs_oichange.png"
                 await capture_optimized(path)
                 screenshots.append(path)

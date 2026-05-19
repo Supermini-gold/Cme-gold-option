@@ -55,9 +55,19 @@ async def send_qs_updates(context: ContextTypes.DEFAULT_TYPE):
     
     for img_path in images:
         if os.path.exists(img_path):
-            with open(img_path, "rb") as f:
-                await context.bot.send_photo(chat_id=chat_id, photo=io.BytesIO(f.read()))
-                await asyncio.sleep(1) # ป้องกันโดน Telegram flood limit
+            try:
+                with open(img_path, "rb") as f:
+                    await context.bot.send_photo(
+                        chat_id=chat_id, 
+                        photo=io.BytesIO(f.read()),
+                        read_timeout=60,
+                        write_timeout=60,
+                        pool_timeout=60
+                    )
+                    await asyncio.sleep(1) # ป้องกันโดน Telegram flood limit
+            except Exception as e:
+                log_msg(f"❌ ส่งรูป {img_path} ไม่สำเร็จ: {e}")
+                await context.bot.send_message(chat_id=chat_id, text=f"⚠️ ส่งรูป {img_path} ไม่สำเร็จ โปรดลองใหม่")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.chat_id

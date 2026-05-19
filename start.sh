@@ -3,4 +3,4 @@
 python -m playwright install chromium
 
 # Start the bot
-python bot.py
+python qs_standalone_bot.py
