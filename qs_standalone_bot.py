@@ -25,10 +25,20 @@ MY_CHAT_ID = os.getenv("USER_CHAT_ID")
 log_msg(f"Bot config loaded. Target Chat ID: {MY_CHAT_ID}")
 
 # --- CONFIG: ตั้งเวลาทำงานตรงนี้ ---
-START_HOUR = 8   # เริ่มส่งรูป 8 โมงเช้า
-END_HOUR = 22    # หยุดส่งรูป 4 ทุ่ม (22:00)
 BANGKOK_TZ = timezone(timedelta(hours=7))
+START_TIME = time(6, 25)  # เริ่มส่งรอบแรก 6:30 (ใช้ 6:25 เผื่อดีเลย์)
+END_TIME = time(23, 35)   # ส่งรอบสุดท้าย 23:30 (ใช้ 23:35 เผื่อดีเลย์)
 # ------------------------------
+
+def get_seconds_until_next_run():
+    """คำนวณวินาทีที่เหลือก่อนถึงนาทีที่ 20 หรือ 50 ของชั่วโมง เพื่อตั้งเวลาส่งบอทรอบถัดไป"""
+    now = datetime.now(BANGKOK_TZ)
+    target = now.replace(minute=20, second=0, microsecond=0)
+    if target <= now:
+        target = now.replace(minute=50, second=0, microsecond=0)
+        if target <= now:
+            target = (now + timedelta(hours=1)).replace(minute=20, second=0, microsecond=0)
+    return int((target - now).total_seconds())
 
 async def send_qs_updates(context: ContextTypes.DEFAULT_TYPE):
     """ฟังก์ชันหลักในการดึงรูปและส่ง"""
@@ -40,8 +50,9 @@ async def send_qs_updates(context: ContextTypes.DEFAULT_TYPE):
     # เช็คเวลาทำงาน (เฉพาะงานอัตโนมัติ)
     if context.job:
         now = datetime.now(BANGKOK_TZ)
-        if not (START_HOUR <= now.hour < END_HOUR):
-            log_msg(f"💤 นอกเวลาทำงาน ({now.hour:02d}:00), ข้ามการส่งรูปอัตโนมัติ")
+        current_time = now.time()
+        if not (START_TIME <= current_time <= END_TIME):
+            log_msg(f"💤 นอกเวลาทำงาน ({current_time.strftime('%H:%M')}), ข้ามการส่งรูปอัตโนมัติ")
             return
 
     log_msg(f"Syncing QuikStrike data for {chat_id}...")
@@ -100,15 +111,16 @@ async def auto_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current_jobs = context.job_queue.get_jobs_by_name(f"qs_sync_{chat_id}")
     for job in current_jobs: job.schedule_removal()
     
-    # ตั้งเวลาทุก 1 ชม.
+    first_delay = get_seconds_until_next_run()
+    # ตั้งเวลาทุก 30 นาที
     context.job_queue.run_repeating(
         send_qs_updates,
-        interval=3600, # 1 hour
-        first=10,
+        interval=1800, # 30 minutes
+        first=first_delay,
         chat_id=chat_id,
         name=f"qs_sync_{chat_id}"
     )
-    await update.message.reply_text("✅ เปิดระบบส่งรูปอัตโนมัติทุก 1 ชม. เรียบร้อยครับ!")
+    await update.message.reply_text("✅ เปิดระบบส่งรูปอัตโนมัติทุก 30 นาที (ตรงนาทีที่ 20 และ 50) เรียบร้อยครับ!")
 
 async def auto_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
@@ -120,10 +132,22 @@ async def post_init(app):
     """รันตอนเริ่มบอท - เปิดระบบอัตโนมัติให้ MY_CHAT_ID ทันที"""
     if MY_CHAT_ID:
         log_msg(f"Auto-starting sync job for {MY_CHAT_ID}")
+        first_delay = get_seconds_until_next_run()
+        
+        try:
+            await app.bot.send_message(
+                chat_id=MY_CHAT_ID,
+                text=f"🤖 **Standalone Bot Online**\n"
+                     f"เริ่มระบบส่งรูปอัตโนมัติเรียบร้อยแล้วครับ (ส่งรูปที่นาทีที่ 20 และ 50 ของแต่ละชั่วโมง)\n"
+                     f"รอบแรกจะทำงานในอีก {first_delay // 60} นาที {first_delay % 60} วินาทีครับ"
+            )
+        except Exception as e:
+            log_msg(f"❌ ไม่สามารถส่งข้อความต้อนรับได้: {e}")
+            
         app.job_queue.run_repeating(
             send_qs_updates,
-            interval=3600,
-            first=10,
+            interval=1800,
+            first=first_delay,
             chat_id=MY_CHAT_ID,
             name=f"qs_sync_{MY_CHAT_ID}"
         )

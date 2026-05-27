@@ -5,7 +5,7 @@ import asyncio
 import sys
 import aiosqlite
 sys.stdout.reconfigure(encoding='utf-8')
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from dotenv import load_dotenv
 from telegram import Update, BotCommand
 from telegram.ext import (
@@ -38,6 +38,9 @@ load_dotenv(env_path)
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
+# Target Chat ID from environment (optional fallback for auto-sync)
+USER_CHAT_ID = os.getenv("USER_CHAT_ID")
+
 # Bangkok timezone (UTC+7)
 BANGKOK_TZ = timezone(timedelta(hours=7))
 
@@ -48,8 +51,28 @@ else:
     gemini_client = None
 
 # Working Hours (Bangkok Time)
-START_HOUR = int(os.getenv("START_HOUR", 8))
-END_HOUR = int(os.getenv("END_HOUR", 22))
+START_TIME = time(6, 25)  # เริ่มส่งรอบแรก 6:30 (ใช้ 6:25 เผื่อดีเลย์)
+END_TIME = time(23, 35)   # ส่งรอบสุดท้าย 23:30 (ใช้ 23:35 เผื่อดีเลย์)
+
+def get_seconds_until_next_run():
+    """คำนวณวินาทีที่เหลือก่อนถึงนาทีที่ 20 หรือ 50 ของชั่วโมง เพื่อตั้งเวลาส่งบอทรอบถัดไป"""
+    now = datetime.now(BANGKOK_TZ)
+    target = now.replace(minute=20, second=0, microsecond=0)
+    if target <= now:
+        target = now.replace(minute=50, second=0, microsecond=0)
+        if target <= now:
+            target = (now + timedelta(hours=1)).replace(minute=20, second=0, microsecond=0)
+    return int((target - now).total_seconds())
+
+def get_seconds_until_next_analysis_run():
+    """คำนวณวินาทีที่เหลือก่อนถึงนาทีที่ 23 หรือ 53 ของชั่วโมง เพื่อตั้งเวลาวิเคราะห์รูปภาพ"""
+    now = datetime.now(BANGKOK_TZ)
+    target = now.replace(minute=23, second=0, microsecond=0)
+    if target <= now:
+        target = now.replace(minute=53, second=0, microsecond=0)
+        if target <= now:
+            target = (now + timedelta(hours=1)).replace(minute=23, second=0, microsecond=0)
+    return int((target - now).total_seconds())
 
 # Per-user state (in-memory)
 user_photos = {}
@@ -130,23 +153,29 @@ def extract_summary(text):
 
 
 def extract_z5_score(text):
-    """Extract Z5 Composite Score from the Z-Score Summary table"""
-    match = re.search(r'Z5 Composite\s*\|\s*([-+]?\d*\.?\d+)', text)
-    if match:
-        return float(match.group(1))
+    """Extract Total Score / Sentiment Score from the scorecard or trade setup"""
+    patterns = [
+        r'TOTAL SCORE\s*\|\s*[^\|]*\s*\|\s*\[?([-+]?\d+)/7\]?',
+        r'Score\s*\[?([-+]?\d+)/7\]?',
+        r'Score\s*([-+]?\d+)/7'
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return float(match.group(1))
     return None
 
 
 def extract_key_levels(text):
-    """Extract Max Pain and GEX Flip Zone from the Key Levels section"""
+    """Extract Max Pain and GEX Flip Zone from the text"""
     max_pain = None
     gex_zone = None
     
-    mp_match = re.search(r'Max Pain Zone:\s*\[?(\d+\.?\d*)\]?', text)
+    mp_match = re.search(r'Max Pain(?:\s*Zone)?:\s*(?:Strike\s*)?\[?(\d+\.?\d*)\]?', text, re.IGNORECASE)
     if mp_match:
         max_pain = float(mp_match.group(1))
         
-    gex_match = re.search(r'GEX Flip Zone:\s*\[?(\d+\.?\d*)\]?', text)
+    gex_match = re.search(r'GEX Flip(?:\s*Zone|\s*Level)?:\s*(?:Strike\s*)?\[?(\d+\.?\d*)\]?', text, re.IGNORECASE)
     if gex_match:
         gex_zone = float(gex_match.group(1))
         
@@ -189,23 +218,29 @@ async def run_and_save_analysis(context, user_id, photos):
         if not gemini_client:
             return None, "Missing Gemini API Key"
 
-        async def generate_with_retry(contents, model_name='gemini-2.0-flash', max_retries=3):
+        async def generate_with_retry(contents, model_name='gemini-2.0-flash', max_retries=4):
+            backoff_times = [5, 15, 45, 90]  # exponential backoff in seconds
             for i in range(max_retries):
                 try:
-                    # Note: genai SDK is synchronous, so we run in executor if needed, 
-                    # but here we just try-except.
-                    resp = gemini_client.models.generate_content(
-                        model=model_name,
-                        contents=contents
+                    # Run synchronous Gemini SDK in a thread to avoid blocking event loop
+                    loop = asyncio.get_event_loop()
+                    resp = await loop.run_in_executor(
+                        None,
+                        lambda: gemini_client.models.generate_content(
+                            model=model_name,
+                            contents=contents
+                        )
                     )
                     return resp, None
                 except Exception as e:
-                    if "429" in str(e) and i < max_retries - 1:
-                        wait_time = (i + 1) * 2
+                    err_str = str(e)
+                    is_quota = "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "quota" in err_str.lower()
+                    if is_quota and i < max_retries - 1:
+                        wait_time = backoff_times[i]
                         print(f"⚠️ Quota hit (429). Retrying in {wait_time}s... (Attempt {i+1}/{max_retries})")
                         await asyncio.sleep(wait_time)
                         continue
-                    return None, str(e)
+                    return None, err_str
             return None, "Max retries exceeded"
 
         images = [PIL.Image.open(io.BytesIO(pb)) for pb in photos]
@@ -503,8 +538,9 @@ async def auto_sync_job(context: ContextTypes.DEFAULT_TYPE):
     
     # Check working hours
     now = datetime.now(BANGKOK_TZ)
-    if not (START_HOUR <= now.hour < END_HOUR):
-        print(f"💤 Outside working hours ({now.hour:02d}:00), skipping auto-sync.")
+    current_time = now.time()
+    if not (START_TIME <= current_time <= END_TIME):
+        print(f"💤 Outside working hours ({current_time.strftime('%H:%M')}), skipping auto-sync.")
         return
 
     images, err = await fetch_quikstrike_data()
@@ -540,6 +576,80 @@ async def auto_sync_job(context: ContextTypes.DEFAULT_TYPE):
             
         except Exception as e:
             print(f"⚠️ Error sending auto-sync to {uid}: {e}")
+
+
+async def auto_analyze_local_images_job(context: ContextTypes.DEFAULT_TYPE):
+    """Background job that monitors local screenshots and runs Gemini analysis"""
+    print("🤖 Starting Hourly Local Image Auto-Analysis...")
+    
+    # 1. Check working hours
+    now = datetime.now(BANGKOK_TZ)
+    current_time = now.time()
+    if not (START_TIME <= current_time <= END_TIME):
+        print(f"💤 Outside working hours ({current_time.strftime('%H:%M')}), skipping local analysis.")
+        return
+
+    # 2. Check if local images are fresh (modified in the last 10 minutes / 600 seconds)
+    files = ["qs_intraday.png", "qs_oi.png", "qs_oichange.png"]
+    curr_ts = datetime.now().timestamp()
+    for f in files:
+        if not os.path.exists(f):
+            print(f"⚠️ File {f} does not exist. Skipping local analysis.")
+            return
+        mtime = os.path.getmtime(f)
+        if curr_ts - mtime > 600:
+            print(f"💤 File {f} is stale (modified {(curr_ts - mtime)/60:.1f} mins ago). Skipping local analysis.")
+            return
+
+    # 3. Read image bytes
+    print("📂 Local screenshots are fresh! Reading images...")
+    image_bytes_list = []
+    for f in files:
+        try:
+            with open(f, "rb") as img_file:
+                image_bytes_list.append(bytearray(img_file.read()))
+        except Exception as e:
+            print(f"❌ Error reading file {f}: {e}")
+            return
+
+    # 4. Gather target users (USER_CHAT_ID from env + DB schedules)
+    target_users = set()
+    if USER_CHAT_ID:
+        try:
+            target_users.add(int(USER_CHAT_ID))
+        except ValueError:
+            pass
+            
+    schedules = await db.get_all_active_schedules()
+    for s in schedules:
+        target_users.add(s['user_id'])
+
+    if not target_users:
+        print("📭 No active users or USER_CHAT_ID found for auto-analysis.")
+        return
+
+    # 5. Run analysis and broadcast to each user
+    print(f"🧠 Running analysis for {len(target_users)} user(s)...")
+    for uid in target_users:
+        try:
+            data, a_err = await run_and_save_analysis(context, uid, image_bytes_list)
+            if a_err:
+                await context.bot.send_message(chat_id=uid, text=f"❌ Auto-Analysis failed: {a_err}")
+                continue
+
+            # Send summary image only (optimized for mobile viewing)
+            await context.bot.send_photo(
+                chat_id=uid,
+                photo=io.BytesIO(data['image_bytes']),
+                caption=f"📊 **Gold Options Auto-Analysis #{data['id']}**\n\n"
+                        f"📝 พิมพ์ /detail {data['id']} เพื่อดูบทวิเคราะห์ตัวเต็มในแชท\n"
+                        f"📄 พิมพ์ /export_pdf {data['id']} เพื่อขอไฟล์รายงาน PDF ครับ"
+            )
+            
+            print(f"✅ Successfully sent auto-analysis to user {uid}")
+            
+        except Exception as e:
+            print(f"⚠️ Error sending auto-analysis to {uid}: {e}")
 
 
 async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1124,12 +1234,13 @@ async def post_init(app):
         name="cot_fetch"
     )
 
-    # Start Hourly QuikStrike Auto-Sync
+    # Start 30-Min Local Image Auto-Analysis (monitors files and runs Gemini at XX:23 and XX:53)
+    first_delay_analysis = get_seconds_until_next_analysis_run()
     app.job_queue.run_repeating(
-        auto_sync_job,
-        interval=timedelta(hours=1),
-        first=timedelta(seconds=60),
-        name="quikstrike_sync"
+        auto_analyze_local_images_job,
+        interval=timedelta(minutes=30),
+        first=timedelta(seconds=first_delay_analysis),
+        name="local_image_analysis"
     )
 
     # Set bot commands menu
