@@ -225,7 +225,7 @@ async def run_and_save_analysis(context, user_id, photos):
         if not gemini_client:
             return None, "Missing Gemini API Key"
 
-        async def generate_with_retry(contents, model_name='gemini-2.0-flash', max_retries=4):
+        async def generate_with_retry(contents, model_name='gemini-2.5-flash', max_retries=4):
             backoff_times = [5, 15, 45, 90]  # exponential backoff in seconds
             for i in range(max_retries):
                 try:
@@ -1204,7 +1204,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for i in range(3):
             try:
                 response = gemini_client.models.generate_content(
-                    model='gemini-2.0-flash',
+                    model='gemini-2.5-flash',
                     contents=followup_prompt
                 )
                 break
