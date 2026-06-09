@@ -16,4 +16,4 @@ COPY . .
 ENV PYTHONUNBUFFERED=1
 
 # Command to run the bot
-CMD ["python", "qs_standalone_bot.py"]
+CMD ["sh", "start.sh"]
