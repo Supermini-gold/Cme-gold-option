@@ -54,24 +54,31 @@ else:
 START_TIME = time(6, 25)  # เริ่มส่งรอบแรก 6:30 (ใช้ 6:25 เผื่อดีเลย์)
 END_TIME = time(23, 35)   # ส่งรอบสุดท้าย 23:30 (ใช้ 23:35 เผื่อดีเลย์)
 
+# วันที่ตลาดทองปิด (0=จันทร์ ... 5=เสาร์, 6=อาทิตย์)
+MARKET_CLOSED_DAYS = {5, 6}  # เสาร์ = 5, อาทิตย์ = 6
+
+def is_market_open() -> bool:
+    """ตรวจสอบว่าวันนี้ตลาดทองเปิดทำการหรือไม่ (จันทร์–ศุกร์เท่านั้น)"""
+    return datetime.now(BANGKOK_TZ).weekday() not in MARKET_CLOSED_DAYS
+
 def get_seconds_until_next_run():
-    """คำนวณวินาทีที่เหลือก่อนถึงนาทีที่ 20 หรือ 50 ของชั่วโมง เพื่อตั้งเวลาส่งบอทรอบถัดไป"""
+    """คำนวณวินาทีที่เหลือก่อนถึงนาทีที่ 00 หรือ 30 ของชั่วโมง เพื่อตั้งเวลาส่งบอทรอบถัดไป"""
     now = datetime.now(BANGKOK_TZ)
-    target = now.replace(minute=20, second=0, microsecond=0)
+    target = now.replace(minute=0, second=0, microsecond=0)
     if target <= now:
-        target = now.replace(minute=50, second=0, microsecond=0)
+        target = now.replace(minute=30, second=0, microsecond=0)
         if target <= now:
-            target = (now + timedelta(hours=1)).replace(minute=20, second=0, microsecond=0)
+            target = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
     return int((target - now).total_seconds())
 
 def get_seconds_until_next_analysis_run():
-    """คำนวณวินาทีที่เหลือก่อนถึงนาทีที่ 23 หรือ 53 ของชั่วโมง เพื่อตั้งเวลาวิเคราะห์รูปภาพ"""
+    """คำนวณวินาทีที่เหลือก่อนถึงนาทีที่ 03 หรือ 33 ของชั่วโมง เพื่อตั้งเวลาวิเคราะห์รูปภาพ"""
     now = datetime.now(BANGKOK_TZ)
-    target = now.replace(minute=23, second=0, microsecond=0)
+    target = now.replace(minute=3, second=0, microsecond=0)
     if target <= now:
-        target = now.replace(minute=53, second=0, microsecond=0)
+        target = now.replace(minute=33, second=0, microsecond=0)
         if target <= now:
-            target = (now + timedelta(hours=1)).replace(minute=23, second=0, microsecond=0)
+            target = (now + timedelta(hours=1)).replace(minute=3, second=0, microsecond=0)
     return int((target - now).total_seconds())
 
 # Per-user state (in-memory)
@@ -534,8 +541,14 @@ async def auto_sync_job(context: ContextTypes.DEFAULT_TYPE):
     if not schedules:
         return
 
-    print("🤖 Starting Hourly Auto-Sync...")
+    print("🤖 Starting Auto-Sync...")
     
+    # Check if market is open (ไม่ทำงานวันเสาร์-อาทิตย์)
+    if not is_market_open():
+        now = datetime.now(BANGKOK_TZ)
+        print(f"🏖️ Weekend ({now.strftime('%A')}): ตลาดทองปิด ข้ามการ sync")
+        return
+
     # Check working hours
     now = datetime.now(BANGKOK_TZ)
     current_time = now.time()
@@ -580,16 +593,22 @@ async def auto_sync_job(context: ContextTypes.DEFAULT_TYPE):
 
 async def auto_analyze_local_images_job(context: ContextTypes.DEFAULT_TYPE):
     """Background job that monitors local screenshots and runs Gemini analysis"""
-    print("🤖 Starting Hourly Local Image Auto-Analysis...")
+    print("🤖 Starting Local Image Auto-Analysis...")
     
-    # 1. Check working hours
+    # 1. Check if market is open (ไม่ทำงานวันเสาร์-อาทิตย์)
+    if not is_market_open():
+        now = datetime.now(BANGKOK_TZ)
+        print(f"🏖️ Weekend ({now.strftime('%A')}): ตลาดทองปิด ข้ามการวิเคราะห์อัตโนมัติ")
+        return
+
+    # 2. Check working hours
     now = datetime.now(BANGKOK_TZ)
     current_time = now.time()
     if not (START_TIME <= current_time <= END_TIME):
         print(f"💤 Outside working hours ({current_time.strftime('%H:%M')}), skipping local analysis.")
         return
 
-    # 2. Check if local images are fresh (modified in the last 10 minutes / 600 seconds)
+    # 3. Check if local images are fresh (modified in the last 10 minutes / 600 seconds)
     files = ["qs_intraday.png", "qs_oi.png", "qs_oichange.png"]
     curr_ts = datetime.now().timestamp()
     for f in files:
@@ -601,7 +620,7 @@ async def auto_analyze_local_images_job(context: ContextTypes.DEFAULT_TYPE):
             print(f"💤 File {f} is stale (modified {(curr_ts - mtime)/60:.1f} mins ago). Skipping local analysis.")
             return
 
-    # 3. Read image bytes
+    # 4. Read image bytes
     print("📂 Local screenshots are fresh! Reading images...")
     image_bytes_list = []
     for f in files:
@@ -612,7 +631,7 @@ async def auto_analyze_local_images_job(context: ContextTypes.DEFAULT_TYPE):
             print(f"❌ Error reading file {f}: {e}")
             return
 
-    # 4. Gather target users (USER_CHAT_ID from env + DB schedules)
+    # 5. Gather target users (USER_CHAT_ID from env + DB schedules)
     target_users = set()
     if USER_CHAT_ID:
         try:
@@ -628,7 +647,7 @@ async def auto_analyze_local_images_job(context: ContextTypes.DEFAULT_TYPE):
         print("📭 No active users or USER_CHAT_ID found for auto-analysis.")
         return
 
-    # 5. Run analysis and broadcast to each user
+    # 6. Run analysis and broadcast to each user
     print(f"🧠 Running analysis for {len(target_users)} user(s)...")
     for uid in target_users:
         try:
@@ -1234,7 +1253,8 @@ async def post_init(app):
         name="cot_fetch"
     )
 
-    # Start 30-Min Local Image Auto-Analysis (monitors files and runs Gemini at XX:23 and XX:53)
+    # Start 30-Min Local Image Auto-Analysis (monitors files and runs Gemini at XX:03 and XX:33)
+    # หยุดวันเสาร์-อาทิตย์โดยอัตโนมัติผ่าน is_market_open() ใน auto_analyze_local_images_job
     first_delay_analysis = get_seconds_until_next_analysis_run()
     app.job_queue.run_repeating(
         auto_analyze_local_images_job,
