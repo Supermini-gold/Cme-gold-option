@@ -72,6 +72,28 @@ class Database:
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS user_alerts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    symbol TEXT NOT NULL,
+                    condition TEXT NOT NULL,
+                    threshold REAL NOT NULL,
+                    is_active BOOLEAN DEFAULT 1,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS daily_alert_state (
+                    user_id INTEGER NOT NULL,
+                    date_str TEXT NOT NULL,
+                    max_atr_alerted INTEGER DEFAULT 0,
+                    sd_alert_state TEXT,
+                    PRIMARY KEY (user_id, date_str)
+                )
+            ''')
             await conn.commit()
 
     async def save_analysis(self, user_id, result_text, num_images=3, summary=None, z5=None, gex=None, max_pain=None, high_1sd=None, low_1sd=None):
@@ -211,4 +233,88 @@ class Database:
                     LIMIT ?
                 )
             ''', (user_id, user_id, keep_count))
+            await conn.commit()
+
+    async def add_alert(self, user_id, symbol, condition, threshold):
+        async with aiosqlite.connect(self.db_path) as conn:
+            cursor = await conn.execute(
+                '''INSERT INTO user_alerts (user_id, symbol, condition, threshold, is_active)
+                   VALUES (?, ?, ?, ?, 1)''',
+                (user_id, symbol, condition, threshold)
+            )
+            await conn.commit()
+            return cursor.lastrowid
+
+    async def get_alerts(self, user_id):
+        async with aiosqlite.connect(self.db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.execute(
+                'SELECT * FROM user_alerts WHERE user_id = ? AND is_active = 1',
+                (user_id,)
+            )
+            return await cursor.fetchall()
+
+    async def delete_alert(self, alert_id, user_id=None):
+        async with aiosqlite.connect(self.db_path) as conn:
+            if user_id:
+                await conn.execute(
+                    'UPDATE user_alerts SET is_active = 0 WHERE id = ? AND user_id = ?',
+                    (alert_id, user_id)
+                )
+            else:
+                await conn.execute(
+                    'UPDATE user_alerts SET is_active = 0 WHERE id = ?',
+                    (alert_id,)
+                )
+            await conn.commit()
+
+    async def get_all_active_alerts(self):
+        async with aiosqlite.connect(self.db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.execute(
+                'SELECT * FROM user_alerts WHERE is_active = 1'
+            )
+            return await cursor.fetchall()
+
+    async def get_unevaluated_history(self):
+        """Fetch analyses that are at least 1 day old and not yet evaluated"""
+        async with aiosqlite.connect(self.db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.execute('''
+                SELECT id, user_id, timestamp, summary, z5_score 
+                FROM analysis_history 
+                WHERE was_accurate IS NULL 
+                AND timestamp <= datetime('now', '-1 day')
+            ''')
+            return await cursor.fetchall()
+
+    async def get_performance_stats(self, user_id):
+        async with aiosqlite.connect(self.db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.execute(
+                'SELECT * FROM performance_stats WHERE user_id = ?',
+                (user_id,)
+            )
+            return await cursor.fetchone()
+
+    async def get_daily_alert_state(self, user_id, date_str):
+        async with aiosqlite.connect(self.db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.execute(
+                'SELECT * FROM daily_alert_state WHERE user_id = ? AND date_str = ?',
+                (user_id, date_str)
+            )
+            return await cursor.fetchone()
+
+    async def update_daily_alert_state(self, user_id, date_str, max_atr=None, sd_state=None):
+        async with aiosqlite.connect(self.db_path) as conn:
+            # Upsert
+            await conn.execute(
+                '''INSERT INTO daily_alert_state (user_id, date_str, max_atr_alerted, sd_alert_state)
+                   VALUES (?, ?, COALESCE(?, 0), ?)
+                   ON CONFLICT(user_id, date_str) DO UPDATE SET
+                   max_atr_alerted = COALESCE(?, max_atr_alerted),
+                   sd_alert_state = COALESCE(?, sd_alert_state)''',
+                (user_id, date_str, max_atr, sd_state, max_atr, sd_state)
+            )
             await conn.commit()
